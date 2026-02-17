@@ -61,16 +61,18 @@ class Command(BaseCommand):
         created = 0
         concept_map = {}
         for order_index, concept in enumerate(concepts_data):
-            external_id = concept.get('id')
+            external_id = concept.get('id') or f"concept-{order_index}"
+            khan_slug = concept.get('khan_slug') or external_id
             obj, _ = Concept.objects.update_or_create(
                 course=course,
-                external_id=external_id,
+                khan_slug=khan_slug,
                 defaults={
+                    'external_id': external_id,
                     'title': concept.get('title', external_id),
                     'description': concept.get('description', ''),
                     'difficulty': concept.get('difficulty', 1),
                     'order_index': order_index,
-                    'khan_slug': concept.get('khan_slug', ''),
+                    'quiz_slug': concept.get('quiz_slug', ''),
                     'is_active': True,
                 },
             )

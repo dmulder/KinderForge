@@ -36,13 +36,15 @@ if not User.objects.filter(username='alice').exists():
         ]:
             concept = Concept.objects.filter(external_id=external_id, course=course).first()
             if concept:
-                MasteryState.objects.create(
+                MasteryState.objects.update_or_create(
                     user=student,
                     concept=concept,
-                    mastery_score=mastery,
-                    confidence_score=mastery,
-                    frustration_score=frustration,
-                    attempts=attempts,
+                    defaults={
+                        'mastery_score': mastery,
+                        'confidence_score': mastery,
+                        'frustration_score': frustration,
+                        'attempts': attempts,
+                    },
                 )
     print(f"Created student: {student.username}")
 else:
