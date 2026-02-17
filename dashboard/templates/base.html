@@ -144,7 +144,10 @@
                 {% if user.is_staff %}
                     <a href="{% url 'admin:index' %}">Admin</a>
                 {% endif %}
-                <a href="{% url 'logout' %}">Logout ({{ user.username }})</a>
+                <form action="{% url 'logout' %}" method="post" class="logout-form">
+                    {% csrf_token %}
+                    <button type="submit">Logout ({{ user.username }})</button>
+                </form>
             {% else %}
                 <a href="{% url 'login' %}">Login</a>
             {% endif %}
