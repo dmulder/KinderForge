@@ -15,6 +15,7 @@ class ParentStudentConfig(models.Model):
         blank=True,
         related_name='starting_configs',
     )
+    starting_concepts_by_course = models.JSONField(default=dict, blank=True)
     override_starting_point = models.BooleanField(default=False)
 
     class Meta:

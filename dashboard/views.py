@@ -6,7 +6,12 @@ from django.db.models import Avg
 
 from accounts.models import Student, Parent
 from ai.provider import get_ai_provider
-from content.khan import fetch_khan_youtube_id, get_khan_classes
+from content.khan import (
+    fetch_khan_youtube_id,
+    get_khan_classes,
+    sync_khan_course_concepts,
+    KhanScrapeError,
+)
 from content.models import Course, Concept, KhanClass
 from mastery.engine import MasteryEngine
 from mastery.models import MasteryState
@@ -150,9 +155,17 @@ def learning_session(request):
     config = ParentStudentConfig.objects.filter(student=request.user).first()
     course = config.courses.first() if config else None
 
-    if config and config.override_starting_point and config.starting_concept:
-        concept = config.starting_concept
+    if config and config.override_starting_point:
+        course_key = str(course.id) if course else None
+        concept_id = config.starting_concepts_by_course.get(course_key) if course_key else None
+        if concept_id:
+            concept = Concept.objects.filter(id=concept_id, is_active=True).first()
+        else:
+            concept = config.starting_concept
     else:
+        concept = None
+
+    if not concept:
         concept = engine.select_next_concept(course=course)
 
     if not concept:
@@ -246,6 +259,7 @@ def parent_student_config(request, student_id: int):
         course_ids = request.POST.getlist('courses')
         khan_classes_raw = request.POST.getlist('khan_classes')
         starting_concept_id = request.POST.get('starting_concept')
+        starting_concepts_raw = request.POST.getlist('starting_concepts')
         override_start = bool(request.POST.get('override_starting_point'))
 
         grade_level_value = int(grade_level) if grade_level else None
@@ -259,9 +273,28 @@ def parent_student_config(request, student_id: int):
         else:
             config.starting_concept = None
 
+        by_course = {}
+        for raw in starting_concepts_raw:
+            if not raw:
+                continue
+            parts = raw.split(':', 1)
+            if len(parts) != 2:
+                continue
+            course_id, concept_id = parts
+            try:
+                course_id_value = int(course_id)
+            except (TypeError, ValueError):
+                continue
+            if not concept_id:
+                by_course.pop(str(course_id_value), None)
+                continue
+            by_course[str(course_id_value)] = concept_id
+        config.starting_concepts_by_course = by_course
+
         config.save()
 
         khan_course_ids = []
+        khan_courses = {}
         if khan_slugs:
             khan_lookup = {
                 item.slug: item
@@ -292,6 +325,7 @@ def parent_student_config(request, student_id: int):
                         is_active=True,
                     )
                 khan_course_ids.append(course.id)
+                khan_courses[slug] = course
 
         selected_course_ids = set()
         for course_id in course_ids:
@@ -306,17 +340,45 @@ def parent_student_config(request, student_id: int):
         else:
             config.courses.clear()
 
-        if config.starting_concept and config.override_starting_point:
-            MasteryState.objects.update_or_create(
-                user=student.user,
-                concept=config.starting_concept,
-                defaults={
-                    'mastery_score': 0.0,
-                    'confidence_score': 0.0,
-                    'frustration_score': 0.0,
-                    'attempts': 0,
-                },
+        khan_scrape_errors = []
+        for slug, course in khan_courses.items():
+            try:
+                sync_khan_course_concepts(
+                    course_slug=slug,
+                    course_title=course.name,
+                    grade_level=course.grade_level,
+                )
+            except KhanScrapeError:
+                khan_scrape_errors.append(course.name)
+
+        if khan_scrape_errors:
+            messages.warning(
+                request,
+                "Khan concepts could not be detected for: "
+                f"{', '.join(khan_scrape_errors)}. "
+                "Check server logs; set KHAN_SCRAPE_DEBUG=1 for link samples.",
             )
+
+        if config.override_starting_point:
+            starting_targets = []
+            if config.starting_concept:
+                starting_targets.append(config.starting_concept)
+            if config.starting_concepts_by_course:
+                for concept_id in config.starting_concepts_by_course.values():
+                    concept = Concept.objects.filter(id=concept_id).first()
+                    if concept:
+                        starting_targets.append(concept)
+            for concept in starting_targets:
+                MasteryState.objects.update_or_create(
+                    user=student.user,
+                    concept=concept,
+                    defaults={
+                        'mastery_score': 0.0,
+                        'confidence_score': 0.0,
+                        'frustration_score': 0.0,
+                        'attempts': 0,
+                    },
+                )
 
         if hasattr(student.user, 'student_profile') and config.grade_level:
             student.user.student_profile.grade_level = config.grade_level
@@ -327,6 +389,25 @@ def parent_student_config(request, student_id: int):
 
     courses = Course.objects.filter(is_active=True)
     concepts = Concept.objects.filter(is_active=True)
+    selected_courses = list(config.courses.all()) if config else []
+    selected_course_ids = [course.id for course in selected_courses]
+    course_concepts = (
+        Concept.objects.filter(is_active=True, course_id__in=selected_course_ids)
+        .select_related('course')
+        .order_by('course__name', 'order_index', 'title')
+    )
+    concepts_by_course = {}
+    for concept in course_concepts:
+        concepts_by_course.setdefault(concept.course_id, []).append(concept)
+    starting_map = config.starting_concepts_by_course or {}
+    course_starting_options = [
+        {
+            'course': course,
+            'concepts': concepts_by_course.get(course.id, []),
+            'selected_id': starting_map.get(str(course.id)),
+        }
+        for course in selected_courses
+    ]
     khan_sync = get_khan_classes()
 
     context = {
@@ -334,6 +415,7 @@ def parent_student_config(request, student_id: int):
         'config': config,
         'courses': courses,
         'concepts': concepts,
+        'course_starting_options': course_starting_options,
         'khan_classes': khan_sync.classes,
         'khan_warning': khan_sync.warning,
     }
