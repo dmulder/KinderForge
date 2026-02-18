@@ -19,6 +19,58 @@ from mastery.services import get_or_start_session, record_quiz
 from dashboard.models import ParentStudentConfig
 
 
+def _get_student_config(user):
+    configs = list(
+        ParentStudentConfig.objects.filter(student=user).order_by('-id')
+    )
+    if not configs:
+        return None
+    for config in configs:
+        if config.override_starting_point:
+            return config
+    for config in configs:
+        starting_map = config.starting_concepts_by_course or {}
+        if config.starting_concept_id or any(value for value in starting_map.values()):
+            return config
+    return configs[0]
+
+
+def _select_learning_concept(engine: MasteryEngine, config: ParentStudentConfig | None):
+    course = config.courses.first() if config else None
+    concept = None
+
+    if config:
+        starting_map = config.starting_concepts_by_course or {}
+        has_starting_map = any(value for value in starting_map.values())
+        use_override = config.override_starting_point or config.starting_concept_id or has_starting_map
+        if use_override:
+            concept_id = None
+            if course:
+                concept_id = starting_map.get(str(course.id))
+            if not concept_id and starting_map and config.courses.exists():
+                for candidate in config.courses.all():
+                    concept_id = starting_map.get(str(candidate.id))
+                    if concept_id:
+                        break
+            if not concept_id and starting_map:
+                for value in starting_map.values():
+                    if value:
+                        concept_id = value
+                        break
+            if concept_id:
+                concept = Concept.objects.filter(id=concept_id, is_active=True).first()
+                if concept:
+                    course = concept.course
+            if not concept and config.starting_concept and config.starting_concept.is_active:
+                concept = config.starting_concept
+                course = concept.course
+
+    if not concept:
+        concept = engine.select_next_concept(course=course)
+
+    return concept, course
+
+
 def home(request):
     """Home page - redirect based on user type or show landing page"""
     if request.user.is_authenticated:
@@ -42,7 +94,8 @@ def student_dashboard(request):
     
     # Use mastery engine to get next concept
     engine = MasteryEngine(request.user)
-    next_concept = engine.select_next_concept()
+    config = _get_student_config(request.user)
+    next_concept, _ = _select_learning_concept(engine, config)
 
     total_concepts = Concept.objects.filter(is_active=True).count()
     mastered_count = MasteryState.objects.filter(user=request.user, mastery_score__gte=0.7).count()
@@ -152,21 +205,8 @@ def learning_session(request):
 
     session = get_or_start_session(request.user)
     engine = MasteryEngine(request.user)
-    config = ParentStudentConfig.objects.filter(student=request.user).first()
-    course = config.courses.first() if config else None
-
-    if config and config.override_starting_point:
-        course_key = str(course.id) if course else None
-        concept_id = config.starting_concepts_by_course.get(course_key) if course_key else None
-        if concept_id:
-            concept = Concept.objects.filter(id=concept_id, is_active=True).first()
-        else:
-            concept = config.starting_concept
-    else:
-        concept = None
-
-    if not concept:
-        concept = engine.select_next_concept(course=course)
+    config = _get_student_config(request.user)
+    concept, course = _select_learning_concept(engine, config)
 
     if not concept:
         messages.info(request, "No eligible concepts found yet.")
