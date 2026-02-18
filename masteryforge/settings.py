@@ -38,7 +38,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    # MasteryForge apps
+    # KinderForge apps
     'accounts',
     'mastery.apps.MasteryConfig',
     'content',

@@ -1,5 +1,5 @@
 """
-AI Provider for MasteryForge - OpenAI integration
+AI Provider for KinderForge - OpenAI integration
 """
 import json
 import os

@@ -1,6 +1,6 @@
-# MasteryForge Quick Start Guide for Homeschool Parents
+# KinderForge Quick Start Guide for Homeschool Parents
 
-This guide will help you get MasteryForge running in under 5 minutes!
+This guide will help you get KinderForge running in under 5 minutes!
 
 ## Step 1: Install Docker
 
@@ -26,7 +26,7 @@ docker build -t masteryforge -f Dockerfile .
 docker build -t masteryforge -f Dockerfile .
 ```
 
-## Step 3: Run MasteryForge
+## Step 3: Run KinderForge
 
 Open a terminal/command prompt and run:
 
@@ -52,11 +52,11 @@ docker run -d `
 
 Wait about 30 seconds for it to start up.
 
-## Step 4: Open MasteryForge
+## Step 4: Open KinderForge
 
 1. Open your web browser
 2. Go to: `http://localhost:8000`
-3. You should see the MasteryForge home page!
+3. You should see the KinderForge home page!
 
 ## Step 5: Try It Out
 
@@ -112,7 +112,7 @@ In the admin panel:
 
 2. Create or edit `concepts.yaml` in that folder
 3. Add your homeschool curriculum concepts
-4. Restart MasteryForge:
+4. Restart KinderForge:
    ```bash
    docker restart masteryforge
    ```
@@ -122,7 +122,7 @@ In the admin panel:
 If you want AI-powered hints and explanations:
 
 1. Get an OpenAI API key from [platform.openai.com](https://platform.openai.com/api-keys)
-2. Stop MasteryForge: `docker stop masteryforge`
+2. Stop KinderForge: `docker stop masteryforge`
 3. Remove it: `docker rm masteryforge`
 4. Re-run with your API key:
    ```bash
@@ -137,7 +137,7 @@ If you want AI-powered hints and explanations:
 
 ## Common Questions
 
-### How do I access MasteryForge from my kids' tablets?
+### How do I access KinderForge from my kids' tablets?
 
 1. Find your computer's IP address:
    - **Windows**: Open Command Prompt, run `ipconfig`, look for "IPv4 Address"
@@ -147,7 +147,7 @@ If you want AI-powered hints and explanations:
 2. On the tablet, open a browser and go to `http://YOUR-IP:8000`
    (For example: `http://192.168.1.100:8000`)
 
-### How do I stop MasteryForge?
+### How do I stop KinderForge?
 
 ```bash
 docker stop masteryforge
@@ -191,8 +191,8 @@ Just copy the entire data folder to a backup location:
 ## Need More Help?
 
 - Check the full [README](README.md) for detailed documentation
-- Report issues on [GitHub](https://github.com/dmulder/MasteryForge/issues)
-- Join discussions on [GitHub Discussions](https://github.com/dmulder/MasteryForge/discussions)
+- Report issues on [GitHub](https://github.com/dmulder/KinderForge/issues)
+- Join discussions on [GitHub Discussions](https://github.com/dmulder/KinderForge/discussions)
 
 ## Daily Use Tips
 

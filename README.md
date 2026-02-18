@@ -1,4 +1,4 @@
-# MasteryForge
+# KinderForge
 
 A self-hosted adaptive learning platform that guides students through structured curriculum with intelligent, frustration-aware progress tracking.
 
@@ -19,7 +19,7 @@ Perfect for homeschool parents who want to track their children's learning progr
 
 **Prerequisites**: Docker installed on your computer ([Get Docker](https://docs.docker.com/get-docker/))
 
-1. **Run MasteryForge** - Just one command!
+1. **Run KinderForge** - Just one command!
    ```bash
    docker run -d \
      -p 8000:8000 \
@@ -30,8 +30,8 @@ Perfect for homeschool parents who want to track their children's learning progr
    
    Or build and run locally:
    ```bash
-   git clone https://github.com/dmulder/MasteryForge.git
-   cd MasteryForge
+   git clone https://github.com/dmulder/KinderForge.git
+   cd KinderForge
    docker build -t masteryforge .
    docker run -d -p 8000:8000 -v masteryforge-data:/app/data --name masteryforge masteryforge
    ```
@@ -43,7 +43,7 @@ Perfect for homeschool parents who want to track their children's learning progr
    - **Parent**: `parent1` / `parent123`
    - **Admin**: `admin` / `admin123`
 
-**That's it!** 🎉 MasteryForge is running!
+**That's it!** 🎉 KinderForge is running!
 
 ### Option 2: Podman (Docker Alternative)
 
@@ -97,7 +97,7 @@ podman run -d \
 
 ## 🔐 Setting Up AI Features (Optional)
 
-MasteryForge can use OpenAI-compatible APIs for personalized hints, problem generation, and explanations.
+KinderForge can use OpenAI-compatible APIs for personalized hints, problem generation, and explanations.
 
 ### Option 1: Azure OpenAI (Microsoft Foundry)
 
@@ -134,17 +134,17 @@ Optional overrides:
      masteryforge
    ```
 
-**Note**: AI features are optional. MasteryForge works perfectly without them using built-in adaptive learning logic.
+**Note**: AI features are optional. KinderForge works perfectly without them using built-in adaptive learning logic.
 
 ## 💾 Production Deployment
 
 ### For Long-Term Use
 
-When running MasteryForge for actual homeschooling (not just testing), follow these steps:
+When running KinderForge for actual homeschooling (not just testing), follow these steps:
 
 #### 1. Persistent Storage Setup
 
-Create a dedicated directory on your computer for MasteryForge data:
+Create a dedicated directory on your computer for KinderForge data:
 
 ```bash
 # Linux/Mac
@@ -212,7 +212,7 @@ docker restart masteryforge
 
 ### 🌐 Access From Other Devices
 
-To access MasteryForge from tablets, phones, or other computers on your network:
+To access KinderForge from tablets, phones, or other computers on your network:
 
 1. **Find your computer's IP address**:
    ```bash
@@ -399,8 +399,8 @@ If you prefer not to use Docker:
 
 1. **Clone and install**:
    ```bash
-   git clone https://github.com/dmulder/MasteryForge.git
-   cd MasteryForge
+   git clone https://github.com/dmulder/KinderForge.git
+   cd KinderForge
    pip install -r requirements.txt
    ```
 
@@ -424,8 +424,8 @@ If you prefer not to use Docker:
 
 ## 🤝 Support & Community
 
-- **Issues**: Report bugs on [GitHub Issues](https://github.com/dmulder/MasteryForge/issues)
-- **Discussions**: Join our [GitHub Discussions](https://github.com/dmulder/MasteryForge/discussions)
+- **Issues**: Report bugs on [GitHub Issues](https://github.com/dmulder/KinderForge/issues)
+- **Discussions**: Join our [GitHub Discussions](https://github.com/dmulder/KinderForge/discussions)
 
 ## 📄 License
 

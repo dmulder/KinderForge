@@ -1,4 +1,4 @@
-# MasteryForge
+# KinderForge
 
 ## Project summary
 - Django-based adaptive learning platform with frustration-aware mastery tracking.

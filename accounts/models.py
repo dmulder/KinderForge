@@ -3,7 +3,7 @@ from django.contrib.auth.models import AbstractUser
 
 
 class User(AbstractUser):
-    """Custom user model for MasteryForge"""
+    """Custom user model for KinderForge"""
     USER_TYPE_CHOICES = (
         ('student', 'Student'),
         ('parent', 'Parent'),
