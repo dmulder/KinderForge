@@ -70,22 +70,14 @@
 
         <div style="margin-bottom: 1.5rem;">
             <label style="display:block; margin-bottom:0.5rem;">Starting concepts by course</label>
-            <div style="display:grid; gap:0.75rem;">
-                {% for item in course_starting_options %}
-                <div style="border:1px solid #e5e7eb; border-radius:8px; padding:0.75rem;">
-                    <div style="font-weight:600; margin-bottom:0.5rem;">{{ item.course.name }}</div>
-                    <select name="starting_concepts" style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px;">
-                        <option value="{{ item.course.id }}:">Auto-select</option>
-                        {% for concept in item.concepts %}
-                        <option value="{{ item.course.id }}:{{ concept.id }}" {% if item.selected_id == concept.id|stringformat:"s" %}selected{% endif %}>
-                            {{ concept.title }}
-                        </option>
-                        {% endfor %}
-                    </select>
+            <div id="course-starting-loading" style="display:none; align-items:center; gap:0.5rem; color:#6b7280; font-size:0.9rem; margin-bottom:0.75rem;">
+                <span class="loading-spinner" aria-hidden="true"></span>
+                Loading course concepts...
+            </div>
+            <div id="course-starting-options" data-url="{% url 'parent_course_starting_options' student.id %}">
+                <div id="course-starting-content">
+                    {% include "dashboard/_course_starting_options.html" with course_starting_options=course_starting_options %}
                 </div>
-                {% empty %}
-                <div style="color:#6b7280; font-size:0.9rem;">Assign courses to select per-course starting concepts.</div>
-                {% endfor %}
             </div>
             <div style="font-size:0.85rem; color:#6b7280; margin-top:0.5rem;">Per-course starting concepts apply when override is enabled.</div>
         </div>
@@ -94,4 +86,81 @@
         <a href="{% url 'parent_dashboard' %}" class="btn btn-secondary" style="margin-left: 0.5rem;">Cancel</a>
     </form>
 </div>
+<style>
+    .loading-spinner {
+        width: 18px;
+        height: 18px;
+        border: 3px solid #e5e7eb;
+        border-top-color: #2563eb;
+        border-radius: 50%;
+        display: inline-block;
+        animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+</style>
+<script>
+    (function () {
+        const courseInputs = Array.from(document.querySelectorAll('input[name="courses"]'));
+        const khanInputs = Array.from(document.querySelectorAll('input[name="khan_classes"]'));
+        const content = document.getElementById('course-starting-content');
+        const loading = document.getElementById('course-starting-loading');
+        const container = document.getElementById('course-starting-options');
+        if (!content || !loading || !container) {
+            return;
+        }
+
+        const buildParams = () => {
+            const params = new URLSearchParams();
+            courseInputs.filter((input) => input.checked).forEach((input) => {
+                params.append('courses', input.value);
+            });
+            khanInputs.filter((input) => input.checked).forEach((input) => {
+                params.append('khan_classes', input.value);
+            });
+            return params;
+        };
+
+        let inflight = null;
+        const refreshStartingOptions = () => {
+            const url = container.dataset.url;
+            if (!url) {
+                return;
+            }
+            const params = buildParams();
+            if (inflight) {
+                inflight.abort();
+            }
+            inflight = new AbortController();
+            loading.style.display = 'flex';
+            fetch(`${url}?${params.toString()}`, {
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                signal: inflight.signal,
+            })
+                .then((response) => {
+                    if (!response.ok) {
+                        throw new Error('Failed to load course concepts.');
+                    }
+                    return response.text();
+                })
+                .then((html) => {
+                    content.innerHTML = html;
+                })
+                .catch((error) => {
+                    if (error.name === 'AbortError') {
+                        return;
+                    }
+                    content.innerHTML = '<div style="color:#b91c1c; font-size:0.9rem;">Unable to load course concepts. Try again.</div>';
+                })
+                .finally(() => {
+                    loading.style.display = 'none';
+                });
+        };
+
+        [...courseInputs, ...khanInputs].forEach((input) => {
+            input.addEventListener('change', refreshStartingOptions);
+        });
+    })();
+</script>
 {% endblock %}

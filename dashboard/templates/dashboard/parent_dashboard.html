@@ -42,7 +42,7 @@
         </div>
 
         <div style="margin-top: 1.5rem;">
-            <a href="{% url 'parent_student_config' item.student.id %}" class="btn">Configure Learning</a>
+            <a href="{% url 'parent_student_config' item.student.id %}" class="btn js-config-link">Configure Learning</a>
         </div>
         
         {% if item.recent_activity %}
@@ -122,4 +122,40 @@
     <p>No students linked to your account yet. Please contact an administrator to link student accounts.</p>
 </div>
 {% endif %}
+<div id="config-loading-overlay" style="position:fixed; inset:0; background:rgba(15, 23, 42, 0.4); display:none; align-items:center; justify-content:center; z-index:9999;">
+    <div style="background:#fff; padding:1rem 1.25rem; border-radius:10px; box-shadow:0 12px 30px rgba(15, 23, 42, 0.25); display:flex; align-items:center; gap:0.75rem; color:#1f2937;">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        Loading student configuration...
+    </div>
+</div>
+<style>
+    .loading-spinner {
+        width: 20px;
+        height: 20px;
+        border: 3px solid #e5e7eb;
+        border-top-color: #2563eb;
+        border-radius: 50%;
+        display: inline-block;
+        animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+</style>
+<script>
+    (function () {
+        const overlay = document.getElementById('config-loading-overlay');
+        if (!overlay) {
+            return;
+        }
+        document.querySelectorAll('.js-config-link').forEach((link) => {
+            link.addEventListener('click', () => {
+                overlay.style.display = 'flex';
+            });
+        });
+        window.addEventListener('pageshow', () => {
+            overlay.style.display = 'none';
+        });
+    })();
+</script>
 {% endblock %}

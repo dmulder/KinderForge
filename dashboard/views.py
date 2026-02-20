@@ -498,3 +498,100 @@ def parent_student_config(request, student_id: int):
         'khan_warning': khan_sync.warning,
     }
     return render(request, 'dashboard/parent_student_config.html', context)
+
+
+@login_required
+def parent_course_starting_options(request, student_id: int):
+    if request.user.user_type != 'parent':
+        messages.error(request, "Access denied. Parent access only.")
+        return redirect('home')
+
+    student = get_object_or_404(Student, id=student_id)
+    if not Parent.objects.filter(user=request.user, students=student).exists():
+        messages.error(request, "Student not linked to this parent.")
+        return redirect('parent_dashboard')
+
+    config, _ = ParentStudentConfig.objects.get_or_create(
+        parent=request.user,
+        student=student.user,
+    )
+
+    course_ids = set()
+    for raw in request.GET.getlist('courses'):
+        try:
+            course_ids.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+
+    khan_slugs = [item.strip() for item in request.GET.getlist('khan_classes') if item.strip()]
+    khan_courses = []
+    if khan_slugs:
+        khan_lookup = {
+            item.slug: item
+            for item in KhanClass.objects.filter(slug__in=khan_slugs)
+        }
+        for slug in khan_slugs:
+            khan_class = khan_lookup.get(slug)
+            title = khan_class.title if khan_class else slug
+            course = Course.objects.filter(khan_slug=slug).order_by('id').first()
+            course_grade = config.grade_level or (course.grade_level if course else None) or 5
+            if course:
+                updates = {}
+                if course.name != title:
+                    updates['name'] = title
+                if course.grade_level != course_grade:
+                    updates['grade_level'] = course_grade
+                if not course.is_active:
+                    updates['is_active'] = True
+                if updates:
+                    for field, value in updates.items():
+                        setattr(course, field, value)
+                    course.save(update_fields=list(updates.keys()))
+            else:
+                course = Course.objects.create(
+                    name=title,
+                    khan_slug=slug,
+                    grade_level=course_grade,
+                    is_active=True,
+                )
+            khan_courses.append(course)
+
+    if khan_courses:
+        for course in khan_courses:
+            if not Concept.objects.filter(course=course, is_active=True).exists():
+                try:
+                    sync_khan_course_concepts(
+                        course_slug=course.khan_slug,
+                        course_title=course.name,
+                        grade_level=course.grade_level,
+                    )
+                except KhanScrapeError:
+                    continue
+
+    course_ids.update([course.id for course in khan_courses])
+    selected_courses = Course.objects.filter(id__in=course_ids)
+
+    course_concepts = (
+        Concept.objects.filter(is_active=True, course_id__in=course_ids)
+        .select_related('course')
+        .order_by('course__name', 'order_index', 'title')
+    )
+    concepts_by_course = {}
+    for concept in course_concepts:
+        concepts_by_course.setdefault(concept.course_id, []).append(concept)
+
+    starting_map = config.starting_concepts_by_course or {}
+    course_starting_options = [
+        {
+            'course': course,
+            'concepts': concepts_by_course.get(course.id, []),
+            'selected_id': starting_map.get(str(course.id)),
+        }
+        for course in selected_courses
+    ]
+
+    return render(
+        request,
+        'dashboard/_course_starting_options.html',
+        {'course_starting_options': course_starting_options},
+    )
