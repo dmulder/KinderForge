@@ -233,7 +233,11 @@ def learning_session(request):
     mastery_percentage = (mastery_state.mastery_score * 100) if mastery_state else 0
 
     video_source = concept.khan_slug or concept.quiz_slug or concept.external_id or ''
-    videos = fetch_khan_related_videos(video_source)
+    videos = [item for item in fetch_khan_related_videos(video_source) if item.youtube_id]
+    video_payload = [
+        {'title': item.title, 'youtube_id': item.youtube_id, 'khan_url': item.khan_url}
+        for item in videos
+    ]
 
     quiz_url = None
     if concept.quiz_slug:
@@ -252,6 +256,7 @@ def learning_session(request):
     context = {
         'concept': concept,
         'videos': videos,
+        'video_payload': video_payload,
         'quiz_url': quiz_url,
         'mastery_percentage': mastery_percentage,
         'encouragement': encouragement,

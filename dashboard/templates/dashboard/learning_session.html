@@ -127,7 +127,12 @@
         }
     };
 
+    let quizShown = false;
     const showQuiz = () => {
+        if (quizShown) {
+            return;
+        }
+        quizShown = true;
         if (videoStage) {
             videoStage.remove();
         }
