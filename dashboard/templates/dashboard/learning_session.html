@@ -61,12 +61,20 @@
 </section>
 {% endif %}
 
-<div class="card" id="quiz-card" style="max-width: 900px; margin: 1.5rem auto; display: none;">
+<div class="card" id="quiz-card" data-concept-id="{{ concept.id }}" style="max-width: 900px; margin: 1.5rem auto; display: none;">
     <h2>Practice Problems</h2>
     <p style="margin-bottom: 1rem;">Complete the practice problems and enter your score to keep moving.</p>
     {% if quiz_url %}
     <div id="practice-popup-status" style="margin-bottom: 1rem; color: #0f172a;">
-        Opening practice problems…
+        Starting practice stream…
+    </div>
+    <div id="practice-stream-shell" tabindex="0" role="application" aria-label="Practice problems stream"
+         style="display: none; margin-bottom: 1rem; outline: none;">
+        <img id="practice-stream-view" alt="Practice problems stream"
+             style="width: 100%; height: auto; display: block; border-radius: 10px; border: 1px solid #e2e8f0; background: #0b0b0f;">
+        <div style="margin-top: 0.5rem; font-size: 0.85rem; color: #64748b;">
+            Click inside the stream to interact. Keyboard input works after clicking once.
+        </div>
     </div>
     <div id="practice-popup-fallback" style="display: none; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem; align-items: center;">
         <a class="btn" href="{{ quiz_url }}" target="_blank" rel="noopener noreferrer">Open in new tab</a>
@@ -77,6 +85,7 @@
     <form method="post" action="{% url 'submit_quiz_result' %}">
         {% csrf_token %}
         <input type="hidden" name="concept_id" value="{{ concept.id }}">
+        <input type="hidden" name="practice_stream_id" id="practice_stream_id" value="">
         <div style="margin-bottom: 1rem;">
             <label for="score_percent" style="display: block; margin-bottom: 0.5rem;">Score (%)</label>
             <input type="number" min="0" max="100" name="score_percent" id="score_percent" required
@@ -88,6 +97,7 @@
 
 {{ video_payload|json_script:"video-data" }}
 {{ quiz_url|default_if_none:""|json_script:"quiz-url-data" }}
+{{ practice_stream_enabled|json_script:"practice-stream-enabled" }}
 <script>
     const quizCard = document.getElementById('quiz-card');
     const videoStage = document.getElementById('video-stage');
@@ -101,7 +111,12 @@
     const practicePopupStatus = document.getElementById('practice-popup-status');
     const practicePopupFallback = document.getElementById('practice-popup-fallback');
     const practicePopupButton = document.getElementById('open-practice-popup');
+    const practiceStreamShell = document.getElementById('practice-stream-shell');
+    const practiceStreamView = document.getElementById('practice-stream-view');
+    const practiceStreamIdField = document.getElementById('practice_stream_id');
     const practiceUrl = JSON.parse(document.getElementById('quiz-url-data')?.textContent || '\"\"');
+    const practiceStreamEnabled = JSON.parse(document.getElementById('practice-stream-enabled')?.textContent || 'false');
+    const conceptId = quizCard?.dataset?.conceptId || '';
     let videos = JSON.parse(document.getElementById('video-data')?.textContent || '[]');
     if (!Array.isArray(videos)) {
         videos = [];
@@ -133,6 +148,9 @@
     };
 
     let quizShown = false;
+    let practiceStreamId = null;
+    let practiceStatusTimer = null;
+    let practiceStreamBound = false;
     const showQuiz = () => {
         if (quizShown) {
             return;
@@ -146,6 +164,14 @@
             quizCard.scrollIntoView({ behavior: 'smooth' });
         }
         if (practiceUrl) {
+            if (practicePopupStatus) {
+                practicePopupStatus.textContent = practiceStreamEnabled ? 'Starting practice stream…' : 'Opening practice problems…';
+                practicePopupStatus.style.color = '#0f172a';
+            }
+            if (practiceStreamEnabled) {
+                startPracticeStream();
+                return;
+            }
             const popup = window.open(practiceUrl, 'practiceProblems', 'width=1100,height=800,noopener,noreferrer');
             if (!popup) {
                 if (practicePopupStatus) {
@@ -262,11 +288,212 @@
         });
     }
 
+    const getCsrfToken = () => {
+        const match = document.cookie.match(/csrftoken=([^;]+)/);
+        return match ? match[1] : '';
+    };
+
+    const setPracticeStatus = (message, isError = false) => {
+        if (!practicePopupStatus) {
+            return;
+        }
+        practicePopupStatus.textContent = message;
+        practicePopupStatus.style.color = isError ? '#b91c1c' : '#0f172a';
+    };
+
+    const showPracticeFallback = (message) => {
+        if (message) {
+            setPracticeStatus(message, true);
+        }
+        if (practicePopupFallback) {
+            practicePopupFallback.style.display = 'flex';
+        }
+    };
+
+    const startPracticeStream = async () => {
+        if (!practiceStreamEnabled || !practiceUrl) {
+            return;
+        }
+        if (!conceptId) {
+            showPracticeFallback('Unable to start practice stream. Use the options below.');
+            return;
+        }
+        setPracticeStatus('Starting practice stream…');
+        if (practiceStreamShell) {
+            practiceStreamShell.style.display = 'block';
+        }
+        try {
+            const response = await fetch('/practice/start/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken(),
+                },
+                body: JSON.stringify({ concept_id: conceptId }),
+            });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                const message = payload?.error || 'Unable to start practice stream.';
+                showPracticeFallback(message);
+                return;
+            }
+            const payload = await response.json();
+            practiceStreamId = payload.stream_id;
+            if (!practiceStreamId) {
+                showPracticeFallback('Practice stream unavailable. Use the options below.');
+                return;
+            }
+            if (practiceStreamIdField) {
+                practiceStreamIdField.value = practiceStreamId;
+            }
+            if (practiceStreamView) {
+                practiceStreamView.src = `/practice/stream/${practiceStreamId}/?t=${Date.now()}`;
+            }
+            bindPracticeStreamControls();
+            startPracticeStatusPoll();
+            setPracticeStatus('Practice stream ready. Click inside to interact.');
+        } catch (err) {
+            console.warn('Practice stream failed', err);
+            showPracticeFallback('Practice stream failed to start. Use the options below.');
+        }
+    };
+
+    const sendPracticeInput = (payload) => {
+        if (!practiceStreamId) {
+            return;
+        }
+        fetch(`/practice/input/${practiceStreamId}/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken(),
+            },
+            body: JSON.stringify(payload),
+            keepalive: true,
+        }).catch(() => {});
+    };
+
+    const bindPracticeStreamControls = () => {
+        if (practiceStreamBound || !practiceStreamShell || !practiceStreamView) {
+            return;
+        }
+        practiceStreamBound = true;
+        let lastMoveAt = 0;
+
+        practiceStreamShell.addEventListener('pointerdown', (event) => {
+            practiceStreamShell.focus();
+            sendPointerEvent('down', event);
+        });
+        practiceStreamShell.addEventListener('pointerup', (event) => {
+            sendPointerEvent('up', event);
+        });
+        practiceStreamShell.addEventListener('pointermove', (event) => {
+            const now = Date.now();
+            if (now - lastMoveAt < 30) {
+                return;
+            }
+            lastMoveAt = now;
+            sendPointerEvent('move', event);
+        });
+        practiceStreamShell.addEventListener('wheel', (event) => {
+            sendPracticeInput({
+                type: 'wheel',
+                delta_x: event.deltaX,
+                delta_y: event.deltaY,
+            });
+            event.preventDefault();
+        }, { passive: false });
+        practiceStreamShell.addEventListener('keydown', (event) => {
+            if (!practiceStreamId) {
+                return;
+            }
+            const modifiers = [];
+            if (event.shiftKey) modifiers.push('Shift');
+            if (event.altKey) modifiers.push('Alt');
+            if (event.ctrlKey) modifiers.push('Control');
+            if (event.metaKey) modifiers.push('Meta');
+
+            if (event.key && event.key.length === 1 && modifiers.length === 0) {
+                sendPracticeInput({ type: 'type', text: event.key });
+            } else {
+                sendPracticeInput({ type: 'press', key: event.key, modifiers });
+            }
+            event.preventDefault();
+        });
+    };
+
+    const sendPointerEvent = (action, event) => {
+        if (!practiceStreamView) {
+            return;
+        }
+        const rect = practiceStreamView.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        sendPracticeInput({
+            type: 'pointer',
+            action,
+            x,
+            y,
+            button: event.button,
+            client_width: rect.width,
+            client_height: rect.height,
+        });
+    };
+
+    const startPracticeStatusPoll = () => {
+        if (!practiceStreamId || practiceStatusTimer) {
+            return;
+        }
+        const scoreInput = document.getElementById('score_percent');
+        practiceStatusTimer = window.setInterval(async () => {
+            if (!practiceStreamId) {
+                return;
+            }
+            try {
+                const response = await fetch(`/practice/status/${practiceStreamId}/`);
+                if (!response.ok) {
+                    return;
+                }
+                const payload = await response.json();
+                if (payload.error) {
+                    setPracticeStatus(payload.error, true);
+                    return;
+                }
+                if (payload.result_score !== null && payload.result_score !== undefined) {
+                    if (scoreInput && !scoreInput.value) {
+                        scoreInput.value = Math.round(payload.result_score);
+                    }
+                    setPracticeStatus('Practice complete. Score captured below.');
+                }
+                if (payload.status && ['finished', 'error', 'stopped', 'idle-timeout'].includes(payload.status)) {
+                    window.clearInterval(practiceStatusTimer);
+                    practiceStatusTimer = null;
+                }
+            } catch (err) {
+                console.warn('Practice status poll failed', err);
+            }
+        }, 3000);
+    };
+
+    const stopPracticeStream = () => {
+        if (!practiceStreamId) {
+            return;
+        }
+        fetch(`/practice/stop/${practiceStreamId}/`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCsrfToken(),
+            },
+            keepalive: true,
+        }).catch(() => {});
+    };
+
     if (!videoStage) {
         showQuiz();
     }
 
     window.addEventListener('resize', resizePlayer);
+    window.addEventListener('beforeunload', stopPracticeStream);
 </script>
 <script src="https://www.youtube.com/iframe_api"></script>
 {% endblock %}

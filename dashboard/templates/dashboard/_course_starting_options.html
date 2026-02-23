@@ -1,0 +1,17 @@
+<div style="display:grid; gap:0.75rem;">
+    {% for item in course_starting_options %}
+    <div style="border:1px solid #e5e7eb; border-radius:8px; padding:0.75rem;">
+        <div style="font-weight:600; margin-bottom:0.5rem;">{{ item.course.name }}</div>
+        <select name="starting_concepts" style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px;">
+            <option value="{{ item.course.id }}:">Auto-select</option>
+            {% for concept in item.concepts %}
+            <option value="{{ item.course.id }}:{{ concept.id }}" {% if item.selected_id == concept.id|stringformat:"s" %}selected{% endif %}>
+                {{ concept.title }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    {% empty %}
+    <div style="color:#6b7280; font-size:0.9rem;">Assign courses to select per-course starting concepts.</div>
+    {% endfor %}
+</div>

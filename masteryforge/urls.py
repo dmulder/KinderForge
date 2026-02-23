@@ -25,4 +25,9 @@ urlpatterns = [
     path('accounts/', include('accounts.urls')),
     path('learn/', dashboard_views.learning_session, name='learning_session'),
     path('quiz-result/', dashboard_views.submit_quiz_result, name='submit_quiz_result'),
+    path('practice/start/', dashboard_views.start_practice_stream, name='start_practice_stream'),
+    path('practice/stream/<str:stream_id>/', dashboard_views.practice_stream, name='practice_stream'),
+    path('practice/input/<str:stream_id>/', dashboard_views.practice_input, name='practice_input'),
+    path('practice/status/<str:stream_id>/', dashboard_views.practice_status, name='practice_status'),
+    path('practice/stop/<str:stream_id>/', dashboard_views.practice_stop, name='practice_stop'),
 ]

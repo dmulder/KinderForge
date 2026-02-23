@@ -1,8 +1,13 @@
+import json
+
 from django.shortcuts import render, redirect, get_object_or_404
+from django.http import JsonResponse, StreamingHttpResponse, HttpResponseBadRequest, HttpResponseNotFound
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.db import models
 from django.db.models import Avg
+from django.views.decorators.http import require_POST
+from django.conf import settings
 
 from accounts.models import Student, Parent
 from ai.provider import get_ai_provider
@@ -17,6 +22,11 @@ from mastery.engine import MasteryEngine
 from mastery.models import MasteryState
 from mastery.services import get_or_start_session, record_quiz
 from dashboard.models import ParentStudentConfig
+from dashboard.practice_stream import (
+    PracticeStreamError,
+    practice_stream_manager,
+    stream_frames,
+)
 
 
 def _get_student_config(user):
@@ -69,6 +79,19 @@ def _select_learning_concept(engine: MasteryEngine, config: ParentStudentConfig 
         concept = engine.select_next_concept(course=course)
 
     return concept, course
+
+
+def _resolve_quiz_url(concept: Concept) -> str | None:
+    if not concept.quiz_slug:
+        return None
+    quiz_slug = concept.quiz_slug.strip()
+    if not quiz_slug:
+        return None
+    if quiz_slug.startswith("http://") or quiz_slug.startswith("https://"):
+        return quiz_slug
+    if quiz_slug.startswith("/"):
+        return f"https://www.khanacademy.org{quiz_slug}"
+    return f"https://www.khanacademy.org/{quiz_slug}"
 
 
 def home(request):
@@ -239,15 +262,7 @@ def learning_session(request):
         for item in videos
     ]
 
-    quiz_url = None
-    if concept.quiz_slug:
-        quiz_slug = concept.quiz_slug.strip()
-        if quiz_slug.startswith("http://") or quiz_slug.startswith("https://"):
-            quiz_url = quiz_slug
-        elif quiz_slug.startswith("/"):
-            quiz_url = f"https://www.khanacademy.org{quiz_slug}"
-        else:
-            quiz_url = f"https://www.khanacademy.org/{quiz_slug}"
+    quiz_url = _resolve_quiz_url(concept)
 
     encouragement = None
     if mastery_state and mastery_state.frustration_score > 0.7:
@@ -262,6 +277,7 @@ def learning_session(request):
         'encouragement': encouragement,
         'session': session,
         'hide_nav': True,
+        'practice_stream_enabled': getattr(settings, 'PRACTICE_STREAM_ENABLED', True),
     }
     return render(request, 'dashboard/learning_session.html', context)
 
@@ -289,6 +305,15 @@ def submit_quiz_result(request):
 
     engine = MasteryEngine(request.user)
     result = engine.update_mastery_after_quiz(concept, score_value)
+    practice_stream_id = request.POST.get('practice_stream_id')
+    if practice_stream_id:
+        stream_session = practice_stream_manager.get_session(practice_stream_id)
+        if stream_session and stream_session.user_id == request.user.id and stream_session.result_payload:
+            result.quiz_attempt.raw_data = {
+                'source': 'practice_stream',
+                'payload': stream_session.result_payload,
+            }
+            result.quiz_attempt.save(update_fields=['raw_data'])
 
     session = get_or_start_session(request.user)
     record_quiz(session, concept, score_value)
@@ -314,6 +339,106 @@ def submit_quiz_result(request):
     })
     response['Refresh'] = '2;url=/learn/'
     return response
+
+
+@login_required
+@require_POST
+def start_practice_stream(request):
+    if request.user.user_type != 'student':
+        return JsonResponse({'error': 'Access denied.'}, status=403)
+    if not getattr(settings, 'PRACTICE_STREAM_ENABLED', True):
+        return JsonResponse({'error': 'Practice streaming is disabled.'}, status=503)
+
+    payload = {}
+    if request.body:
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except json.JSONDecodeError:
+            return HttpResponseBadRequest('Invalid JSON payload.')
+
+    concept_id = payload.get('concept_id') or request.POST.get('concept_id')
+    if not concept_id:
+        return JsonResponse({'error': 'Missing concept_id.'}, status=400)
+
+    concept = get_object_or_404(Concept, id=concept_id, is_active=True)
+    quiz_url = _resolve_quiz_url(concept)
+    if not quiz_url:
+        return JsonResponse({'error': 'No quiz URL configured for this concept.'}, status=400)
+
+    try:
+        session = practice_stream_manager.start_session(request.user.id, concept.id, quiz_url)
+    except PracticeStreamError as exc:
+        return JsonResponse({'error': str(exc)}, status=503)
+
+    return JsonResponse({
+        'stream_id': session.id,
+        'status': session.status,
+        'viewport': {
+            'width': session.viewport_width,
+            'height': session.viewport_height,
+        },
+    })
+
+
+@login_required
+def practice_stream(request, stream_id: str):
+    session = practice_stream_manager.get_session(str(stream_id))
+    if not session or session.user_id != request.user.id:
+        return HttpResponseNotFound('Practice stream not found.')
+
+    response = StreamingHttpResponse(
+        stream_frames(session),
+        content_type='multipart/x-mixed-replace; boundary=frame',
+    )
+    response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
+    response['X-Accel-Buffering'] = 'no'
+    return response
+
+
+@login_required
+@require_POST
+def practice_input(request, stream_id: str):
+    session = practice_stream_manager.get_session(str(stream_id))
+    if not session or session.user_id != request.user.id:
+        return JsonResponse({'error': 'Practice stream not found.'}, status=404)
+
+    try:
+        payload = json.loads(request.body.decode('utf-8') or '{}')
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest('Invalid JSON payload.')
+
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest('Invalid input payload.')
+
+    session.enqueue_input(payload)
+    return JsonResponse({'ok': True})
+
+
+@login_required
+def practice_status(request, stream_id: str):
+    session = practice_stream_manager.get_session(str(stream_id))
+    if not session or session.user_id != request.user.id:
+        return JsonResponse({'error': 'Practice stream not found.'}, status=404)
+
+    return JsonResponse({
+        'status': session.status,
+        'result_score': session.result_score,
+        'error': session.error,
+        'result_payload': session.result_payload if session.result_score is not None else {},
+    })
+
+
+@login_required
+@require_POST
+def practice_stop(request, stream_id: str):
+    session = practice_stream_manager.get_session(str(stream_id))
+    if not session or session.user_id != request.user.id:
+        return JsonResponse({'error': 'Practice stream not found.'}, status=404)
+
+    practice_stream_manager.stop_session(session.id, reason='stopped')
+    return JsonResponse({'ok': True})
 
 
 @login_required
