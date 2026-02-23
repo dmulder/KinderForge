@@ -52,6 +52,31 @@ class KhanVideoItem:
     khan_url: str
 
 
+VIDEO_DEBUG_ENV = "KHAN_VIDEO_DEBUG"
+VIDEO_DEBUG_MAX_LINKS = 20
+
+
+def _video_debug_enabled() -> bool:
+    return os.environ.get(VIDEO_DEBUG_ENV) == '1' or os.environ.get(SCRAPE_DEBUG_ENV) == '1'
+
+
+def _video_debug(message: str, *args) -> None:
+    if not _video_debug_enabled():
+        return
+    logger.warning("KhanVideoDebug: " + message, *args)
+
+
+def _clip_list(items: Iterable[str], limit: int = VIDEO_DEBUG_MAX_LINKS) -> list[str]:
+    if not items:
+        return []
+    clipped: list[str] = []
+    for item in items:
+        if len(clipped) >= limit:
+            break
+        clipped.append(item)
+    return clipped
+
+
 
 def _extract_youtube_id(html: str) -> Optional[str]:
     soup = BeautifulSoup(html, 'html.parser')
@@ -61,6 +86,7 @@ def _extract_youtube_id(html: str) -> Optional[str]:
         src = str(iframe.get('src'))
         match = re.search(r"youtube(?:-nocookie)?\.com/embed/([\w-]+)", src)
         if match:
+            _video_debug("YouTube ID extracted from iframe src=%s", src)
             return match.group(1)
 
     for script in soup.find_all('script'):
@@ -68,6 +94,7 @@ def _extract_youtube_id(html: str) -> Optional[str]:
             continue
         match = re.search(r"\"youtubeId\"\s*:\s*\"([\w-]+)\"", script.string)
         if match:
+            _video_debug("YouTube ID extracted from script tag.")
             return match.group(1)
 
     return None
@@ -76,12 +103,15 @@ def _extract_youtube_id(html: str) -> Optional[str]:
 def _try_fetch_oembed(khan_slug: str) -> Optional[str]:
     url = "https://www.khanacademy.org/api/internal/oembed"
     target = f"https://www.khanacademy.org/{khan_slug}"
+    _video_debug("Attempting oEmbed fetch url=%s target=%s", url, target)
     response = requests.get(url, params={'url': target}, timeout=12)
     if response.status_code != 200:
+        _video_debug("oEmbed fetch failed status=%s", response.status_code)
         return None
     data = response.json()
     html = data.get('html')
     if not html:
+        _video_debug("oEmbed fetch returned no HTML.")
         return None
     return _extract_youtube_id(html)
 
@@ -90,17 +120,23 @@ def fetch_khan_youtube_id(khan_slug: str) -> KhanVideoResult:
     cache_key = f"khan:youtube:{khan_slug}"
     cached = cache.get(cache_key)
     if cached:
+        _video_debug("YouTube ID cache hit slug=%s id=%s", khan_slug, cached)
         return cached
 
     db_cache = KhanLessonCache.objects.filter(khan_slug=khan_slug).first()
     if db_cache and db_cache.youtube_id:
         cache.set(cache_key, db_cache.youtube_id, timeout=60 * 60 * 12)
+        _video_debug("YouTube ID db cache hit slug=%s id=%s", khan_slug, db_cache.youtube_id)
         return db_cache.youtube_id
 
     url = f"https://www.khanacademy.org/{khan_slug}"
+    _video_debug("Fetching YouTube ID from url=%s", url)
     response = requests.get(url, timeout=12)
     response.raise_for_status()
+    _video_debug("YouTube ID fetch status=%s html_len=%s", response.status_code, len(response.text))
     youtube_id = _extract_youtube_id(response.text)
+    if not youtube_id:
+        _video_debug("YouTube ID not found in HTML slug=%s", khan_slug)
 
     KhanLessonCache.objects.update_or_create(
         khan_slug=khan_slug,
@@ -108,23 +144,29 @@ def fetch_khan_youtube_id(khan_slug: str) -> KhanVideoResult:
     )
     if youtube_id:
         cache.set(cache_key, youtube_id, timeout=60 * 60 * 12)
+        _video_debug("YouTube ID cached slug=%s id=%s", khan_slug, youtube_id)
     return youtube_id
 
 
 def fetch_khan_related_videos(source_slug: str) -> list[KhanVideoItem]:
     if not _looks_like_khan_slug(source_slug):
+        _video_debug("Video fetch skipped: source_slug not Khan-like (%s).", source_slug)
         return []
     slug = _normalize_slug(None, source_slug)
     if not slug:
+        _video_debug("Video fetch skipped: unable to normalize slug from (%s).", source_slug)
         return []
     cache_key = f"khan:videos:{slug}"
     cached = cache.get(cache_key)
     if cached is not None:
+        _video_debug("Video cache hit slug=%s count=%s", slug, len(cached))
         return [
             KhanVideoItem(**item) if isinstance(item, dict) else item
             for item in cached
             if item
         ]
+
+    _video_debug("Video fetch start source_slug=%s normalized_slug=%s", source_slug, slug)
 
     had_error = False
     try:
@@ -134,9 +176,12 @@ def fetch_khan_related_videos(source_slug: str) -> list[KhanVideoItem]:
         videos = []
         had_error = True
 
+    _video_debug("Video fetch collected slug=%s count=%s error=%s", slug, len(videos), had_error)
+
     if not videos:
         fallback_slug = _concept_prefix(slug)
         try:
+            _video_debug("Video fallback attempt slug=%s fallback_slug=%s", slug, fallback_slug)
             youtube_id = fetch_khan_youtube_id(fallback_slug)
         except requests.RequestException as exc:
             logger.warning("Khan youtube fallback failed for %s: %s", fallback_slug, exc)
@@ -149,6 +194,9 @@ def fetch_khan_related_videos(source_slug: str) -> list[KhanVideoItem]:
                         khan_url=_normalize_url(None, fallback_slug),
                     )
                 ]
+                _video_debug("Video fallback success fallback_slug=%s youtube_id=%s", fallback_slug, youtube_id)
+            else:
+                _video_debug("Video fallback returned no youtube_id fallback_slug=%s", fallback_slug)
 
     serialized = [
         {'title': item.title, 'youtube_id': item.youtube_id, 'khan_url': item.khan_url}
@@ -156,8 +204,10 @@ def fetch_khan_related_videos(source_slug: str) -> list[KhanVideoItem]:
     ]
     if videos or not had_error:
         cache.set(cache_key, serialized, timeout=VIDEO_CACHE_TTL)
+        _video_debug("Video cache set slug=%s count=%s had_error=%s", slug, len(serialized), had_error)
     else:
         logger.info("Skipping empty Khan video cache for %s due to fetch error.", slug)
+        _video_debug("Video cache skipped slug=%s count=0 had_error=%s", slug, had_error)
     return videos
 
 
@@ -171,19 +221,25 @@ def _looks_like_khan_slug(value: str) -> bool:
 
 def _collect_related_videos(slug: str) -> list[KhanVideoItem]:
     if _is_video_slug(slug):
+        _video_debug("Slug looks like video slug: %s", slug)
         item = _video_item_from_slug(slug, title="")
         return [item] if item else []
 
+    _video_debug("Collecting related videos for slug=%s prefix=%s", slug, _concept_prefix(slug))
     html = _fetch_khan_html(slug)
+    _video_debug("Fetched HTML for slug=%s html_len=%s", slug, len(html))
     links = _extract_related_video_links(html, slug)
+    _video_debug("Extracted related links slug=%s link_count=%s", slug, len(links))
     videos: list[KhanVideoItem] = []
     seen_ids: set[str] = set()
 
     for link in links[:RELATED_VIDEO_LIMIT]:
         item = _video_item_from_slug(link['slug'], title=link.get('title') or "")
         if not item:
+            _video_debug("Video item failed slug=%s", link.get('slug'))
             continue
         if item.youtube_id in seen_ids:
+            _video_debug("Duplicate youtube_id skipped id=%s slug=%s", item.youtube_id, link.get('slug'))
             continue
         videos.append(item)
         seen_ids.add(item.youtube_id)
@@ -192,6 +248,9 @@ def _collect_related_videos(slug: str) -> list[KhanVideoItem]:
         item = _video_item_from_slug(slug, title="")
         if item:
             videos.append(item)
+            _video_debug("Fallback to slug video item slug=%s id=%s", slug, item.youtube_id)
+        else:
+            _video_debug("Fallback to slug video item failed slug=%s", slug)
 
     return videos
 
@@ -199,6 +258,7 @@ def _collect_related_videos(slug: str) -> list[KhanVideoItem]:
 def _fetch_khan_html(slug: str) -> str:
     url = _normalize_url(None, slug)
     driver = os.environ.get(SCRAPE_DRIVER_ENV, SCRAPE_DRIVER_DEFAULT).lower()
+    _video_debug("Fetch HTML driver=%s url=%s", driver, url)
     if driver == SCRAPE_DRIVER_REQUESTS:
         return _fetch_khan_html_requests(url)
     if driver == SCRAPE_DRIVER_PLAYWRIGHT:
@@ -223,7 +283,9 @@ def _fetch_khan_html_requests(url: str) -> str:
         'User-Agent': SCRAPE_USER_AGENT,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     }
+    _video_debug("Requests fetch url=%s user_agent=%s", url, headers.get('User-Agent'))
     response = requests.get(url, headers=headers, timeout=SCRAPE_REQUEST_TIMEOUT)
+    _video_debug("Requests fetch status=%s url=%s html_len=%s", response.status_code, url, len(response.text))
     response.raise_for_status()
     html = response.text
     if any(marker in html for marker in CLIENT_CHALLENGE_MARKERS):
@@ -233,6 +295,7 @@ def _fetch_khan_html_requests(url: str) -> str:
             response.status_code,
             len(html),
         )
+        _video_debug("Requests fetch hit client challenge url=%s", url)
         raise KhanScrapeChallenge(
             "Khan Academy returned a client challenge page; HTML content is unavailable for scraping."
         )
@@ -253,9 +316,17 @@ def _fetch_khan_html_playwright(url: str) -> str:
         try:
             page = browser.new_page(user_agent=SCRAPE_USER_AGENT)
             try:
+                _video_debug("Playwright fetch start url=%s", url)
                 response = page.goto(url, wait_until='networkidle', timeout=SCRAPE_PLAYWRIGHT_TIMEOUT)
                 response_status = response.status if response else None
                 html = page.content()
+                _video_debug(
+                    "Playwright fetch done url=%s status=%s final_url=%s html_len=%s",
+                    url,
+                    response_status,
+                    page.url,
+                    len(html),
+                )
             except PlaywrightTimeoutError as exc:
                 raise KhanScrapeError(f"Playwright timed out loading {url}.") from exc
 
@@ -266,6 +337,7 @@ def _fetch_khan_html_playwright(url: str) -> str:
                     response_status,
                     len(html),
                 )
+                _video_debug("Playwright fetch hit client challenge url=%s", url)
                 raise KhanScrapeChallenge(
                     "Khan Academy returned a client challenge page; HTML content is unavailable for scraping."
                 )
@@ -296,6 +368,12 @@ def _extract_related_video_links(html: str, concept_slug: str) -> list[dict]:
 
     if json_blobs:
         json_links = _extract_video_links_from_data(json_blobs, concept_slug)
+    _video_debug(
+        "Extract video links concept_slug=%s json_blobs=%s json_links=%s",
+        concept_slug,
+        len(json_blobs),
+        len(json_links),
+    )
     heading = soup.find(string=RELATED_CONTENT_PATTERN)
     if heading:
         section = heading.find_parent()
@@ -308,38 +386,117 @@ def _extract_related_video_links(html: str, concept_slug: str) -> list[dict]:
 
     prefix = _concept_prefix(concept_slug)
     results: list[dict] = []
+    fallback_results: list[dict] = []
     seen: set[str] = set()
+    fallback_seen: set[str] = set()
+    json_stats = {
+        'total': 0,
+        'nonvideo': 0,
+        'prefix_mismatch': 0,
+        'duplicates': 0,
+        'added': 0,
+        'fallback_added': 0,
+    }
     for link in json_links:
+        json_stats['total'] += 1
         slug = link.get('slug')
         if not slug or not _is_video_slug(slug):
-            continue
-        if prefix and not slug.startswith(prefix):
-            continue
-        if slug in seen:
+            json_stats['nonvideo'] += 1
             continue
         title = link.get('title') or _title_from_slug(slug)
+        if prefix and not slug.startswith(prefix):
+            json_stats['prefix_mismatch'] += 1
+            if slug in fallback_seen:
+                json_stats['duplicates'] += 1
+                continue
+            fallback_results.append({
+                'slug': slug,
+                'title': title,
+            })
+            fallback_seen.add(slug)
+            json_stats['fallback_added'] += 1
+            continue
+        if slug in seen:
+            json_stats['duplicates'] += 1
+            continue
         results.append({
             'slug': slug,
             'title': title,
         })
         seen.add(slug)
-    for link in link_nodes:
+        json_stats['added'] += 1
+
+    link_nodes_list = list(link_nodes or [])
+    dom_stats = {
+        'total': len(link_nodes_list),
+        'nonvideo': 0,
+        'prefix_mismatch': 0,
+        'duplicates': 0,
+        'added': 0,
+        'fallback_added': 0,
+        'missing_href': 0,
+    }
+    for link in link_nodes_list:
         href = link.get('href')
         if not isinstance(href, str) or not href:
+            dom_stats['missing_href'] += 1
             continue
         slug = _normalize_slug(None, href)
         if not slug or not _is_video_slug(slug):
-            continue
-        if prefix and not slug.startswith(prefix):
-            continue
-        if slug in seen:
+            dom_stats['nonvideo'] += 1
             continue
         title = _extract_link_label(link)
+        if prefix and not slug.startswith(prefix):
+            dom_stats['prefix_mismatch'] += 1
+            if slug in fallback_seen:
+                dom_stats['duplicates'] += 1
+                continue
+            fallback_results.append({
+                'slug': slug,
+                'title': title,
+            })
+            fallback_seen.add(slug)
+            dom_stats['fallback_added'] += 1
+            continue
+        if slug in seen:
+            dom_stats['duplicates'] += 1
+            continue
         results.append({
             'slug': slug,
             'title': title,
         })
         seen.add(slug)
+        dom_stats['added'] += 1
+
+    if _video_debug_enabled():
+        json_sample = _clip_list([item.get('slug') or '' for item in json_links if item.get('slug')])
+        dom_sample = _clip_list(
+            [
+                _normalize_slug(None, link.get('href'))
+                for link in link_nodes_list
+                if isinstance(link.get('href'), str) and link.get('href')
+            ]
+        )
+        result_sample = _clip_list([item['slug'] for item in results])
+        _video_debug(
+            "Video link stats concept_slug=%s prefix=%s json_stats=%s dom_stats=%s",
+            concept_slug,
+            prefix,
+            json_stats,
+            dom_stats,
+        )
+        _video_debug("Video link samples json_slugs=%s", json_sample)
+        _video_debug("Video link samples dom_slugs=%s", dom_sample)
+        _video_debug("Video link results slugs=%s", result_sample)
+
+    if not results and fallback_results:
+        _video_debug(
+            "No prefix-matched videos for concept_slug=%s; using fallback results count=%s",
+            concept_slug,
+            len(fallback_results),
+        )
+        results = fallback_results
+
     return results
 
 
@@ -396,11 +553,15 @@ def _is_video_slug(slug: str) -> bool:
 
 
 def _video_item_from_slug(slug: str, title: str) -> Optional[KhanVideoItem]:
+    _video_debug("Building video item from slug=%s", slug)
     html = _fetch_khan_html(slug)
+    _video_debug("Video item HTML fetched slug=%s html_len=%s", slug, len(html))
     youtube_id = _extract_youtube_id(html)
     if not youtube_id:
+        _video_debug("Video item missing youtube_id slug=%s", slug)
         return None
     display_title = title or _title_from_slug(slug)
+    _video_debug("Video item built slug=%s youtube_id=%s title=%s", slug, youtube_id, display_title)
     return KhanVideoItem(
         title=display_title,
         youtube_id=youtube_id,
