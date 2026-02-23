@@ -312,22 +312,44 @@ def _install_practice_banner_guard(page) -> None:
                 const rect = node.getBoundingClientRect();
                 return !!(rect && rect.width > 0 && rect.height > 0);
             };
+            const dismissed = new WeakSet();
+            const isDismissed = (node) => dismissed.has(node) || node.dataset?.mfDismissed === '1';
+            const isSidebarClose = (node) =>
+                node.matches('[data-testid="sidebar-close"], [aria-label="Close content list"]');
+            const shouldClick = (node) => {
+                if (!isVisible(node)) return false;
+                if (isDismissed(node)) return false;
+                if (node.getAttribute('aria-disabled') === 'true') return false;
+                if (isSidebarClose(node) && node.getAttribute('aria-expanded') !== 'true') return false;
+                return true;
+            };
             const dismiss = () => {
                 selectors.forEach((selector) => {
                     document.querySelectorAll(selector).forEach((node) => {
-                        if (!isVisible(node)) return;
-                        try { node.click(); } catch (err) { /* ignore */ }
+                        if (!shouldClick(node)) return;
+                        try {
+                            node.click();
+                            dismissed.add(node);
+                            node.dataset.mfDismissed = '1';
+                        } catch (err) { /* ignore */ }
                     });
                 });
+            };
+            let lastRun = 0;
+            const schedule = () => {
+                const now = Date.now();
+                if (now - lastRun < 250) return;
+                lastRun = now;
+                dismiss();
             };
             const start = () => {
                 dismiss();
                 const root = document.documentElement || document.body;
                 if (root) {
-                    const observer = new MutationObserver(() => dismiss());
+                    const observer = new MutationObserver(() => schedule());
                     observer.observe(root, { childList: true, subtree: true });
                 }
-                setInterval(dismiss, 2000);
+                setInterval(schedule, 2000);
             };
             if (document.readyState === 'loading') {
                 document.addEventListener('DOMContentLoaded', start, { once: true });
