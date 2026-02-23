@@ -27,13 +27,13 @@ PRACTICE_STREAM_RESULT_GRACE = int(getattr(settings, 'PRACTICE_STREAM_RESULT_GRA
 PRACTICE_STREAM_SESSION_RETENTION = int(getattr(settings, 'PRACTICE_STREAM_SESSION_RETENTION', 300))
 PRACTICE_STREAM_JPEG_QUALITY = int(getattr(settings, 'PRACTICE_STREAM_JPEG_QUALITY', 70))
 PRACTICE_STREAM_BANNER_CHECK_INTERVAL = float(
-    getattr(settings, 'PRACTICE_STREAM_BANNER_CHECK_INTERVAL', 3.0)
+    getattr(settings, 'PRACTICE_STREAM_BANNER_CHECK_INTERVAL', 0.0)
 )
 PRACTICE_STREAM_BANNER_BURST_ATTEMPTS = int(
-    getattr(settings, 'PRACTICE_STREAM_BANNER_BURST_ATTEMPTS', 6)
+    getattr(settings, 'PRACTICE_STREAM_BANNER_BURST_ATTEMPTS', 4)
 )
 PRACTICE_STREAM_BANNER_BURST_DELAY = float(
-    getattr(settings, 'PRACTICE_STREAM_BANNER_BURST_DELAY', 0.15)
+    getattr(settings, 'PRACTICE_STREAM_BANNER_BURST_DELAY', 0.2)
 )
 
 
@@ -193,6 +193,7 @@ def _run_session(session: PracticeStreamSession, manager: PracticeStreamManager)
             )
             page = context.new_page()
             page.set_default_timeout(10_000)
+            _install_practice_banner_guard(page)
 
             def handle_response(response) -> None:
                 if session.result_score is not None:
@@ -249,9 +250,10 @@ def _run_session(session: PracticeStreamSession, manager: PracticeStreamManager)
 
                 _drain_input_queue(page, session)
 
-                if now - last_banner_check >= PRACTICE_STREAM_BANNER_CHECK_INTERVAL:
-                    _dismiss_practice_banners(page)
-                    last_banner_check = now
+                if PRACTICE_STREAM_BANNER_CHECK_INTERVAL > 0:
+                    if now - last_banner_check >= PRACTICE_STREAM_BANNER_CHECK_INTERVAL:
+                        _dismiss_practice_banners(page)
+                        last_banner_check = now
 
                 if now - last_frame >= FRAME_INTERVAL:
                     _capture_frame(page, session)
@@ -298,6 +300,45 @@ def _dismiss_cookie_banner(page) -> None:
         page.get_by_role('button', name=re.compile(r'strictly necessary', re.I)).click(timeout=1500)
     except Exception:
         pass
+
+
+def _install_practice_banner_guard(page) -> None:
+    try:
+        page.add_init_script(
+            """(selectors) => {
+            const isVisible = (node) => {
+                if (!node) return false;
+                if (node.offsetParent) return true;
+                const rect = node.getBoundingClientRect();
+                return !!(rect && rect.width > 0 && rect.height > 0);
+            };
+            const dismiss = () => {
+                selectors.forEach((selector) => {
+                    document.querySelectorAll(selector).forEach((node) => {
+                        if (!isVisible(node)) return;
+                        try { node.click(); } catch (err) { /* ignore */ }
+                    });
+                });
+            };
+            const start = () => {
+                dismiss();
+                const root = document.documentElement || document.body;
+                if (root) {
+                    const observer = new MutationObserver(() => dismiss());
+                    observer.observe(root, { childList: true, subtree: true });
+                }
+                setInterval(dismiss, 2000);
+            };
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', start, { once: true });
+            } else {
+                start();
+            }
+        }""",
+            list(_BANNER_DISMISS_SELECTORS),
+        )
+    except Exception:
+        return
 
 
 def _dismiss_practice_banners(page) -> int:
