@@ -126,17 +126,38 @@ def fetch_khan_related_videos(source_slug: str) -> list[KhanVideoItem]:
             if item
         ]
 
+    had_error = False
     try:
         videos = _collect_related_videos(slug)
     except (requests.RequestException, KhanScrapeError) as exc:
         logger.warning("Khan video fetch failed for %s: %s", slug, exc)
         videos = []
+        had_error = True
+
+    if not videos:
+        fallback_slug = _concept_prefix(slug)
+        try:
+            youtube_id = fetch_khan_youtube_id(fallback_slug)
+        except requests.RequestException as exc:
+            logger.warning("Khan youtube fallback failed for %s: %s", fallback_slug, exc)
+        else:
+            if youtube_id:
+                videos = [
+                    KhanVideoItem(
+                        title=_title_from_slug(fallback_slug),
+                        youtube_id=youtube_id,
+                        khan_url=_normalize_url(None, fallback_slug),
+                    )
+                ]
 
     serialized = [
         {'title': item.title, 'youtube_id': item.youtube_id, 'khan_url': item.khan_url}
         for item in videos
     ]
-    cache.set(cache_key, serialized, timeout=VIDEO_CACHE_TTL)
+    if videos or not had_error:
+        cache.set(cache_key, serialized, timeout=VIDEO_CACHE_TTL)
+    else:
+        logger.info("Skipping empty Khan video cache for %s due to fetch error.", slug)
     return videos
 
 
