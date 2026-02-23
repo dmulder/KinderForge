@@ -26,6 +26,15 @@ PRACTICE_STREAM_MAX_SESSIONS = int(getattr(settings, 'PRACTICE_STREAM_MAX_SESSIO
 PRACTICE_STREAM_RESULT_GRACE = int(getattr(settings, 'PRACTICE_STREAM_RESULT_GRACE', 30))
 PRACTICE_STREAM_SESSION_RETENTION = int(getattr(settings, 'PRACTICE_STREAM_SESSION_RETENTION', 300))
 PRACTICE_STREAM_JPEG_QUALITY = int(getattr(settings, 'PRACTICE_STREAM_JPEG_QUALITY', 70))
+PRACTICE_STREAM_BANNER_CHECK_INTERVAL = float(
+    getattr(settings, 'PRACTICE_STREAM_BANNER_CHECK_INTERVAL', 3.0)
+)
+PRACTICE_STREAM_BANNER_BURST_ATTEMPTS = int(
+    getattr(settings, 'PRACTICE_STREAM_BANNER_BURST_ATTEMPTS', 6)
+)
+PRACTICE_STREAM_BANNER_BURST_DELAY = float(
+    getattr(settings, 'PRACTICE_STREAM_BANNER_BURST_DELAY', 0.15)
+)
 
 
 FRAME_INTERVAL = 1.0 / max(PRACTICE_STREAM_FPS, 1.0)
@@ -149,6 +158,14 @@ _RESPONSE_URL_HINTS = (
     'quiz',
 )
 
+_BANNER_DISMISS_SELECTORS = (
+    '#onetrust-close-btn-container button',
+    'button[data-testid="close-button"], button[aria-label="Close Welcome Banner"]',
+    'button[aria-label="Close modal"]',
+    'button[aria-label="Dismiss banner."]',
+    'button[data-testid="sidebar-close"], button[aria-label="Close content list"]',
+)
+
 
 def _run_session(session: PracticeStreamSession, manager: PracticeStreamManager) -> None:
     try:
@@ -214,10 +231,12 @@ def _run_session(session: PracticeStreamSession, manager: PracticeStreamManager)
                 return
 
             _dismiss_cookie_banner(page)
+            _dismiss_practice_banners_burst(page)
             session.status = 'running'
 
             last_frame = 0.0
             last_result_check = 0.0
+            last_banner_check = 0.0
 
             while not session.stop_event.is_set():
                 now = time.monotonic()
@@ -229,6 +248,10 @@ def _run_session(session: PracticeStreamSession, manager: PracticeStreamManager)
                         break
 
                 _drain_input_queue(page, session)
+
+                if now - last_banner_check >= PRACTICE_STREAM_BANNER_CHECK_INTERVAL:
+                    _dismiss_practice_banners(page)
+                    last_banner_check = now
 
                 if now - last_frame >= FRAME_INTERVAL:
                     _capture_frame(page, session)
@@ -275,6 +298,36 @@ def _dismiss_cookie_banner(page) -> None:
         page.get_by_role('button', name=re.compile(r'strictly necessary', re.I)).click(timeout=1500)
     except Exception:
         pass
+
+
+def _dismiss_practice_banners(page) -> int:
+    try:
+        return int(page.evaluate(
+            """(selectors) => {
+            let clicked = 0;
+            for (const selector of selectors) {
+                const nodes = document.querySelectorAll(selector);
+                nodes.forEach((node) => {
+                    if (node && typeof node.click === 'function') {
+                        node.click();
+                        clicked += 1;
+                    }
+                });
+            }
+            return clicked;
+        }""",
+            list(_BANNER_DISMISS_SELECTORS),
+        ))
+    except Exception:
+        return 0
+
+
+def _dismiss_practice_banners_burst(page) -> None:
+    for _ in range(max(PRACTICE_STREAM_BANNER_BURST_ATTEMPTS, 1)):
+        clicked = _dismiss_practice_banners(page)
+        if clicked <= 0:
+            return
+        time.sleep(PRACTICE_STREAM_BANNER_BURST_DELAY)
 
 
 def _capture_frame(page, session: PracticeStreamSession) -> None:
