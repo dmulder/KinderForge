@@ -3,6 +3,7 @@
   const LOG_THROTTLE_MS = 3000;
   const LOG_TIMERS = new Map();
   const PERSISTENT_DEBUG_KEY = "kf_debug_log";
+  const FETCHED_CANDIDATE_CACHE = new Map();
 
   function toSerializable(value) {
     try {
@@ -112,6 +113,18 @@
       if (index > 0) {
         return value.slice(0, index);
       }
+    }
+    return "";
+  }
+
+  function coursePrefixFromPath(pathname) {
+    const value = normalizePath(pathname || "");
+    const parts = value.split("/").filter(Boolean);
+    if (parts.length >= 2) {
+      return `/${parts[0]}/${parts[1]}`;
+    }
+    if (parts.length === 1) {
+      return `/${parts[0]}`;
     }
     return "";
   }
@@ -258,9 +271,27 @@ function isContentSlug(slug) {
     return raw;
   }
 
-  function getCourseLinkCandidates() {
+  function titleFromSlug(slug) {
+    const normalized = normalizeSlug(slug);
+    if (!normalized) {
+      return "";
+    }
+    const parts = normalized.split("/").filter(Boolean);
+    const markerIndex = parts.findIndex((part) => part === "v" || part === "video" || part === "e");
+    const raw = markerIndex >= 0 && parts[markerIndex + 1] ? parts[markerIndex + 1] : parts[parts.length - 1];
+    if (!raw) {
+      return "";
+    }
+    return raw
+      .replace(/[-_]+/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  function getCourseLinkCandidates(options = {}) {
     const links = Array.from(document.querySelectorAll("a[href]"));
-    const prefix = unitPrefixFromPracticePath(currentPath());
+    const scope = options.scope === "unit" ? "unit" : "course";
+    const prefix = scope === "unit" ? unitPrefixFromPracticePath(currentPath()) : coursePrefixFromPath(currentPath());
+    const maxCount = Math.max(8, Math.min(120, Number(options.maxCount || 60)));
     const items = [];
     const seen = new Set();
     for (const link of links) {
@@ -285,27 +316,183 @@ function isContentSlug(slug) {
       const text = String(
         link.getAttribute("aria-label") || link.getAttribute("title") || link.textContent || ""
       ).trim();
-      if (!text) {
-        continue;
-      }
+      const title = text || titleFromSlug(slug) || "Khan step";
       seen.add(slug);
-      items.push({ slug, title: text, type: toStepType(slug) });
-      if (items.length >= 10) {
+      items.push({ slug, title, type: toStepType(slug) });
+      if (items.length >= maxCount) {
         break;
       }
     }
     const sorted = items.sort((a, b) => stepPriorityBySlug(a.slug) - stepPriorityBySlug(b.slug));
+    const videoCount = sorted.filter((item) => item.type === "lesson").length;
+    const practiceCount = sorted.length - videoCount;
     debug("discovered-candidates", {
       currentPath: currentPath(),
+      scope,
       prefix,
       count: sorted.length,
+      videoCount,
+      practiceCount,
       sample: sorted.slice(0, 8)
     });
     return sorted;
   }
 
+  function buildCandidatesFromLinks(links, requiredPrefix = "") {
+    const videos = [];
+    const practices = [];
+    const discovered = [];
+    const seen = new Set();
+    for (const link of links) {
+      const slug = normalizeSlug(String(link.getAttribute("href") || "").trim());
+      if (!slug || seen.has(slug) || slug === currentPath()) {
+        continue;
+      }
+      if (requiredPrefix && !slug.startsWith(requiredPrefix)) {
+        continue;
+      }
+      if (!isContentSlug(slug) || isUndesiredStartSlug(slug)) {
+        continue;
+      }
+      seen.add(slug);
+      const type = toStepType(slug);
+      const text = String(
+        link.getAttribute("aria-label") || link.getAttribute("title") || link.textContent || ""
+      ).trim();
+      const title = text || titleFromSlug(slug) || (type === "practice" ? "Practice" : "Lesson video");
+      discovered.push({ slug, type, title });
+      if (type === "lesson") {
+        videos.push(slug);
+      } else {
+        practices.push(slug);
+      }
+    }
+    return { videos, practices, discovered };
+  }
+
+  async function fetchCandidatesFromPath(pathname, requiredPrefix = "") {
+    const normalizedPath = normalizeSlug(pathname);
+    if (!normalizedPath) {
+      return { videos: [], practices: [], discovered: [] };
+    }
+    const cacheKey = `${normalizedPath}|${requiredPrefix}`;
+    if (FETCHED_CANDIDATE_CACHE.has(cacheKey)) {
+      return FETCHED_CANDIDATE_CACHE.get(cacheKey);
+    }
+    try {
+      const response = await fetch(`https://www.khanacademy.org${normalizedPath}`, {
+        credentials: "include"
+      });
+      if (!response.ok) {
+        debug("candidate-fetch-non-ok", {
+          normalizedPath,
+          requiredPrefix,
+          status: response.status
+        });
+        const empty = { videos: [], practices: [], discovered: [] };
+        FETCHED_CANDIDATE_CACHE.set(cacheKey, empty);
+        return empty;
+      }
+      const html = await response.text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const links = Array.from(doc.querySelectorAll("a[href]"));
+      const parsed = buildCandidatesFromLinks(links, requiredPrefix);
+      FETCHED_CANDIDATE_CACHE.set(cacheKey, parsed);
+      debug("candidate-fetch-success", {
+        normalizedPath,
+        requiredPrefix,
+        videos: parsed.videos.length,
+        practices: parsed.practices.length,
+        discovered: parsed.discovered.length
+      });
+      return parsed;
+    } catch (error) {
+      debug("candidate-fetch-error", {
+        normalizedPath,
+        requiredPrefix,
+        error: String(error)
+      });
+      const empty = { videos: [], practices: [], discovered: [] };
+      FETCHED_CANDIDATE_CACHE.set(cacheKey, empty);
+      return empty;
+    }
+  }
+
+  function mergeSlugLists(primary = [], extras = [], maxCount = 8) {
+    const seen = new Set();
+    const merged = [];
+    for (const list of [primary, extras]) {
+      for (const raw of list || []) {
+        const slug = normalizeSlug(raw);
+        if (!slug || seen.has(slug)) {
+          continue;
+        }
+        seen.add(slug);
+        merged.push(slug);
+        if (merged.length >= maxCount) {
+          return merged;
+        }
+      }
+    }
+    return merged;
+  }
+
+  function mergeDiscoveredLists(primary = [], extras = [], maxCount = 120) {
+    const seen = new Set();
+    const merged = [];
+    for (const list of [primary, extras]) {
+      for (const item of list || []) {
+        const slug = normalizeSlug(item?.slug || item?.url || item?.pathname);
+        if (!slug || seen.has(slug) || isUndesiredStartSlug(slug) || !isContentSlug(slug)) {
+          continue;
+        }
+        seen.add(slug);
+        const type = item?.type === "practice" || item?.type === "lesson" ? item.type : toStepType(slug);
+        const title = String(item?.title || "").trim() || titleFromSlug(slug) || "Khan step";
+        merged.push({ slug, type, title });
+        if (merged.length >= maxCount) {
+          return merged;
+        }
+      }
+    }
+    return merged;
+  }
+
+  async function collectManualAdvanceCandidates() {
+    let preferredLessonSlugs = getPreferredLessonSlugsFromPage();
+    let preferredPracticeSlugs = getPreferredPracticeSlugsFromPage();
+    let discoveredSteps = getCourseLinkCandidates({ scope: "course", maxCount: 80 });
+
+    const unitPrefix = unitPrefixFromPracticePath(currentPath());
+    const coursePrefix = coursePrefixFromPath(currentPath());
+    const shouldFetchUnit = Boolean(
+      unitPrefix && (!preferredLessonSlugs.length || !preferredPracticeSlugs.length || discoveredSteps.length < 8)
+    );
+    if (shouldFetchUnit) {
+      const fetchedUnit = await fetchCandidatesFromPath(unitPrefix, unitPrefix);
+      preferredLessonSlugs = mergeSlugLists(preferredLessonSlugs, fetchedUnit.videos, 8);
+      preferredPracticeSlugs = mergeSlugLists(preferredPracticeSlugs, fetchedUnit.practices, 8);
+      discoveredSteps = mergeDiscoveredLists(discoveredSteps, fetchedUnit.discovered, 120);
+    }
+
+    const shouldFetchCourse = Boolean(coursePrefix && discoveredSteps.length < 12);
+    if (shouldFetchCourse) {
+      const fetchedCourse = await fetchCandidatesFromPath(coursePrefix, coursePrefix);
+      preferredLessonSlugs = mergeSlugLists(preferredLessonSlugs, fetchedCourse.videos, 10);
+      preferredPracticeSlugs = mergeSlugLists(preferredPracticeSlugs, fetchedCourse.practices, 10);
+      discoveredSteps = mergeDiscoveredLists(discoveredSteps, fetchedCourse.discovered, 120);
+    }
+
+    return {
+      preferredLessonSlugs,
+      preferredPracticeSlugs,
+      discoveredSteps
+    };
+  }
+
   function getPreferredLessonSlugsFromPage() {
-    const prefix = unitPrefixFromPracticePath(currentPath());
+    const unitPrefix = unitPrefixFromPracticePath(currentPath());
+    const coursePrefix = coursePrefixFromPath(currentPath());
     const links = Array.from(document.querySelectorAll("a[href]"));
     const seen = new Set();
     const videos = [];
@@ -333,15 +520,23 @@ function isContentSlug(slug) {
       }
     }
 
-    for (const slug of nearbyVideoCandidates) {
-      if (seen.has(slug)) {
-        continue;
+    function addVideoCandidate(slug, requiredPrefix) {
+      if (!slug || seen.has(slug)) {
+        return false;
       }
-      if (prefix && !slug.startsWith(prefix)) {
-        continue;
+      if (requiredPrefix && !slug.startsWith(requiredPrefix)) {
+        return false;
+      }
+      if (!slug.includes("/v/") && !slug.includes("/video")) {
+        return false;
       }
       seen.add(slug);
       videos.push(slug);
+      return true;
+    }
+
+    for (const slug of nearbyVideoCandidates) {
+      addVideoCandidate(slug, unitPrefix);
       if (videos.length >= 4) {
         break;
       }
@@ -353,22 +548,30 @@ function isContentSlug(slug) {
       }
       const href = String(link.getAttribute("href") || "").trim();
       const slug = normalizeSlug(href);
-      if (!slug || seen.has(slug)) {
-        continue;
+      addVideoCandidate(slug, unitPrefix);
+    }
+
+    if (videos.length < 4 && coursePrefix) {
+      for (const slug of nearbyVideoCandidates) {
+        addVideoCandidate(slug, coursePrefix);
+        if (videos.length >= 8) {
+          break;
+        }
       }
-      if (!slug.includes("/v/") && !slug.includes("/video")) {
-        continue;
+      for (const link of links) {
+        if (videos.length >= 8) {
+          break;
+        }
+        const href = String(link.getAttribute("href") || "").trim();
+        const slug = normalizeSlug(href);
+        addVideoCandidate(slug, coursePrefix);
       }
-      if (prefix && !slug.startsWith(prefix)) {
-        continue;
-      }
-      seen.add(slug);
-      videos.push(slug);
     }
 
     debug("preferred-lesson-slugs", {
       currentPath: currentPath(),
-      prefix,
+      unitPrefix,
+      coursePrefix,
       count: videos.length,
       videos
     });
@@ -376,7 +579,8 @@ function isContentSlug(slug) {
   }
 
   function getPreferredPracticeSlugsFromPage() {
-    const prefix = unitPrefixFromPracticePath(currentPath());
+    const unitPrefix = unitPrefixFromPracticePath(currentPath());
+    const coursePrefix = coursePrefixFromPath(currentPath());
     const links = Array.from(document.querySelectorAll("a[href]"));
     const seen = new Set();
     const practices = [];
@@ -386,6 +590,22 @@ function isContentSlug(slug) {
       const href = String(link.getAttribute("href") || "").trim();
       return normalizeSlug(href) === normalizedCurrent;
     });
+
+    function addPracticeCandidate(slug, requiredPrefix) {
+      if (!slug || seen.has(slug) || slug === normalizedCurrent) {
+        return false;
+      }
+      if (requiredPrefix && !slug.startsWith(requiredPrefix)) {
+        return false;
+      }
+      const isPractice = slug.includes("/e/") || slug.includes("/exercise") || slug.includes("/practice");
+      if (!isPractice) {
+        return false;
+      }
+      seen.add(slug);
+      practices.push(slug);
+      return true;
+    }
 
     for (const anchor of currentAnchors) {
       const container = anchor.closest("li, article, section, ul, ol, nav, div");
@@ -397,14 +617,7 @@ function isContentSlug(slug) {
       );
       for (const practiceLink of localPracticeLinks) {
         const slug = normalizeSlug(String(practiceLink.getAttribute("href") || "").trim());
-        if (!slug || seen.has(slug) || slug === normalizedCurrent) {
-          continue;
-        }
-        if (prefix && !slug.startsWith(prefix)) {
-          continue;
-        }
-        seen.add(slug);
-        practices.push(slug);
+        addPracticeCandidate(slug, unitPrefix);
       }
     }
 
@@ -413,23 +626,23 @@ function isContentSlug(slug) {
         break;
       }
       const slug = normalizeSlug(String(link.getAttribute("href") || "").trim());
-      if (!slug || seen.has(slug) || slug === normalizedCurrent) {
-        continue;
+      addPracticeCandidate(slug, unitPrefix);
+    }
+
+    if (practices.length < 4 && coursePrefix) {
+      for (const link of links) {
+        if (practices.length >= 8) {
+          break;
+        }
+        const slug = normalizeSlug(String(link.getAttribute("href") || "").trim());
+        addPracticeCandidate(slug, coursePrefix);
       }
-      const isPractice = slug.includes("/e/") || slug.includes("/exercise") || slug.includes("/practice");
-      if (!isPractice) {
-        continue;
-      }
-      if (prefix && !slug.startsWith(prefix)) {
-        continue;
-      }
-      seen.add(slug);
-      practices.push(slug);
     }
 
     debug("preferred-practice-slugs", {
       currentPath: currentPath(),
-      prefix,
+      unitPrefix,
+      coursePrefix,
       count: practices.length,
       practices
     });
@@ -463,20 +676,22 @@ function isContentSlug(slug) {
     const nextBtn = root.querySelector("#kf-next-btn");
     const optionsBtn = root.querySelector("#kf-options-btn");
     nextBtn.addEventListener("click", async () => {
-      const preferredLessonSlugs = getPreferredLessonSlugsFromPage();
-      const preferredPracticeSlugs = getPreferredPracticeSlugsFromPage();
+      const { preferredLessonSlugs, preferredPracticeSlugs, discoveredSteps } = await collectManualAdvanceCandidates();
       debug("jump-next-click", {
         currentPath: currentPath(),
         activeStep: STATE.activeStep,
         nextStep: STATE.nextStep,
         preferredLessonSlugs,
-        preferredPracticeSlugs
+        preferredPracticeSlugs,
+        discoveredCount: discoveredSteps.length,
+        discoveredVideoCount: discoveredSteps.filter((step) => step.type === "lesson").length
       });
       const response = await chrome.runtime.sendMessage({
         type: "KF_GOTO_NEXT",
         manualAdvance: true,
         preferredLessonSlugs,
-        preferredPracticeSlugs
+        preferredPracticeSlugs,
+        discoveredSteps
       });
       debug("jump-next-response", response);
       if (!response?.ok) {

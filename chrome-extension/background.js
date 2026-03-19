@@ -151,6 +151,21 @@ function unitPrefixFromSlug(slug) {
   return value;
 }
 
+function coursePrefixFromSlug(slug) {
+  const value = normalizeKhanSlug(slug);
+  if (!value) {
+    return "";
+  }
+  const parts = value.split("/").filter(Boolean);
+  if (parts.length >= 2) {
+    return `/${parts[0]}/${parts[1]}`;
+  }
+  if (parts.length === 1) {
+    return `/${parts[0]}`;
+  }
+  return "";
+}
+
 function stepPriority(step) {
   const slug = String(step?.slug || "").toLowerCase();
   if (slug.includes("/v/") || slug.includes("/video") || slug.includes("/lesson") || slug.includes("/l/")) {
@@ -623,7 +638,136 @@ function findUnvisitedStepForSlugList(settings, slugs, expectedType, unitPrefix 
 }
 
 function contentPath(settings) {
-  return (settings.path || []).filter((step) => isContentSlug(step.slug));
+  return (settings.path || []).filter((step) => hasStrongContentMarker(step.slug));
+}
+
+async function maybeExtendPathFromDiscovery(
+  settings,
+  currentPath,
+  preferredLessonSlugs = [],
+  preferredPracticeSlugs = [],
+  discoveredSteps = []
+) {
+  const existingPath = Array.isArray(settings.path) ? settings.path : [];
+  if (!existingPath.length) {
+    return settings;
+  }
+
+  const currentCoursePrefix = coursePrefixFromSlug(currentPath);
+  const currentUnitPrefix = unitPrefixFromSlug(currentPath);
+  const knownSlugs = new Set(existingPath.map((step) => normalizeKhanSlug(step.slug)).filter(Boolean));
+  const knownIds = new Set(existingPath.map((step) => String(step.id || "").trim()).filter(Boolean));
+
+  const rawCandidates = [];
+  for (const slug of preferredLessonSlugs || []) {
+    rawCandidates.push({ slug, type: "lesson", title: "Lesson video" });
+  }
+  for (const slug of preferredPracticeSlugs || []) {
+    rawCandidates.push({ slug, type: "practice", title: "Practice" });
+  }
+  for (const item of discoveredSteps || []) {
+    rawCandidates.push(item);
+  }
+
+  const additions = [];
+  for (const rawCandidate of rawCandidates) {
+    const slugSource = typeof rawCandidate === "string"
+      ? rawCandidate
+      : rawCandidate?.slug || rawCandidate?.url || rawCandidate?.pathname;
+    const slug = normalizeKhanSlug(slugSource);
+    if (
+      !slug ||
+      knownSlugs.has(slug) ||
+      isUndesiredStartSlug(slug) ||
+      !isContentSlug(slug) ||
+      !hasStrongContentMarker(slug)
+    ) {
+      continue;
+    }
+    if (currentCoursePrefix && !slug.startsWith(currentCoursePrefix)) {
+      continue;
+    }
+    const rawType = typeof rawCandidate === "object" ? rawCandidate?.type : "";
+    const type = rawType === "practice" || rawType === "lesson" ? rawType : toStepTypeFromSlug(slug);
+    const rawTitle = typeof rawCandidate === "object" ? String(rawCandidate?.title || "").trim() : "";
+    additions.push({
+      slug,
+      type,
+      title: rawTitle || (type === "practice" ? "Practice" : "Lesson video")
+    });
+    knownSlugs.add(slug);
+  }
+
+  if (!additions.length) {
+    return settings;
+  }
+
+  additions.sort((a, b) => {
+    const aInCurrentUnit = currentUnitPrefix && unitPrefixFromSlug(a.slug) === currentUnitPrefix ? 0 : 1;
+    const bInCurrentUnit = currentUnitPrefix && unitPrefixFromSlug(b.slug) === currentUnitPrefix ? 0 : 1;
+    if (aInCurrentUnit !== bInCurrentUnit) {
+      return aInCurrentUnit - bInCurrentUnit;
+    }
+    return stepPriority(a) - stepPriority(b);
+  });
+
+  const needsLessonBeforePractice =
+    currentPath.includes("/e/") &&
+    preferredLessonSlugs.some((slug) => {
+      const normalized = normalizeKhanSlug(slug);
+      return normalized && !knownSlugs.has(normalized);
+    });
+
+  if (needsLessonBeforePractice) {
+    additions.sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type === "lesson" ? -1 : 1;
+      }
+      const aInCurrentUnit = currentUnitPrefix && unitPrefixFromSlug(a.slug) === currentUnitPrefix ? 0 : 1;
+      const bInCurrentUnit = currentUnitPrefix && unitPrefixFromSlug(b.slug) === currentUnitPrefix ? 0 : 1;
+      if (aInCurrentUnit !== bInCurrentUnit) {
+        return aInCurrentUnit - bInCurrentUnit;
+      }
+      return stepPriority(a) - stepPriority(b);
+    });
+  }
+
+  const nextPath = [...existingPath];
+  let serial = nextPath.length;
+  let previousId = nextPath.length ? nextPath[nextPath.length - 1].id : "";
+  for (const addition of additions) {
+    serial += 1;
+    const baseId = slugToStepId(addition.slug, `step_${serial}`);
+    let id = `${baseId}_${serial}`;
+    while (knownIds.has(id)) {
+      serial += 1;
+      id = `${baseId}_${serial}`;
+    }
+    knownIds.add(id);
+    nextPath.push({
+      id,
+      title: addition.title,
+      slug: addition.slug,
+      type: addition.type,
+      prerequisites: previousId ? [previousId] : []
+    });
+    previousId = id;
+  }
+
+  const saved = await saveSettings({
+    ...settings,
+    path: nextPath
+  });
+
+  debug("path-extended-from-discovery", {
+    currentPath,
+    coursePrefix: currentCoursePrefix,
+    unitPrefix: currentUnitPrefix,
+    addedCount: additions.length,
+    added: additions.slice(0, 12)
+  });
+
+  return saved;
 }
 
 function selectManualAdvanceStep(settings, currentPath, options = {}) {
@@ -793,11 +937,19 @@ async function gotoNextStep(tabId) {
   };
 }
 
-async function gotoNextStepManual(tabId, preferredLessonSlugs = [], preferredPracticeSlugs = []) {
+async function gotoNextStepManual(tabId, preferredLessonSlugs = [], preferredPracticeSlugs = [], discoveredSteps = []) {
   let settings = await getSettings();
   const tab = await chrome.tabs.get(tabId);
   const currentPath = normalizePathname(tab?.url || "");
   const currentUnitPrefix = unitPrefixFromSlug(currentPath);
+
+  settings = await maybeExtendPathFromDiscovery(
+    settings,
+    currentPath,
+    preferredLessonSlugs,
+    preferredPracticeSlugs,
+    discoveredSteps
+  );
 
   if (currentPath.includes("/e/") && Array.isArray(preferredLessonSlugs) && preferredLessonSlugs.length) {
     const preferred = preferredLessonSlugs
@@ -830,30 +982,6 @@ async function gotoNextStepManual(tabId, preferredLessonSlugs = [], preferredPra
         preferred: true
       };
     }
-  }
-
-  const currentStep = findStepBySlug(settings.path || [], currentPath);
-  const derivedLessonPath = lessonContainerFromPracticeSlug(currentPath);
-  if (!currentStep && derivedLessonPath && !isUndesiredStartSlug(derivedLessonPath) && derivedLessonPath !== currentPath) {
-    const derivedUrl = `https://www.khanacademy.org${derivedLessonPath}`;
-    debug("goto-next-manual-derived-lesson", {
-      currentPath,
-      derivedLessonPath,
-      derivedUrl
-    });
-    await chrome.tabs.update(tabId, { url: derivedUrl });
-    return {
-      ok: true,
-      nextStep: {
-        id: slugToStepId(derivedLessonPath, "derived_lesson"),
-        title: "Lesson material",
-        slug: derivedLessonPath,
-        type: "lesson",
-        reason: "Opening lesson material before practice"
-      },
-      url: derivedUrl,
-      derived: true
-    };
   }
 
   const nextStep = selectManualAdvanceStep(settings, currentPath, { preferredPracticeSlugs });
@@ -947,7 +1075,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return gotoNextStepManual(
             tabId,
             message.preferredLessonSlugs || [],
-            message.preferredPracticeSlugs || []
+            message.preferredPracticeSlugs || [],
+            message.discoveredSteps || []
           );
         }
         return gotoNextStep(tabId);
