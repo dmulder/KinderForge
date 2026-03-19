@@ -2,6 +2,10 @@
 
 A self-hosted adaptive learning platform that guides students through structured curriculum with intelligent, frustration-aware progress tracking.
 
+## Browser Extension Direction
+
+This repository now includes a Chrome extension prototype in `chrome-extension/` that shifts orchestration from the hosted dashboard into the learner's Khan Academy session. The extension lets students (or parents) define a path in extension settings, then auto-guides navigation to the next lesson/practice step while recording lightweight completion signals.
+
 Perfect for homeschool parents who want to track their children's learning progress with adaptive difficulty and frustration monitoring.
 
 ## ✨ Features

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KinderForge Guide</title>
+    <style>
+      body {
+        width: 320px;
+        margin: 0;
+        padding: 14px;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        background: linear-gradient(165deg, #f8fafc, #eef2ff);
+        color: #1f2937;
+      }
+      .card {
+        background: #ffffff;
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+        padding: 12px;
+        box-shadow: 0 8px 20px rgba(30, 64, 175, 0.12);
+      }
+      h1 {
+        font-size: 15px;
+        margin: 0 0 10px;
+      }
+      .meta {
+        font-size: 12px;
+        color: #475569;
+        margin-bottom: 8px;
+      }
+      .next {
+        font-size: 13px;
+        line-height: 1.4;
+        margin-bottom: 12px;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 8px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      #next-btn {
+        background: #0ea5e9;
+        color: #ffffff;
+      }
+      #options-btn {
+        background: #e2e8f0;
+        color: #0f172a;
+      }
+      #status {
+        font-size: 11px;
+        color: #334155;
+        margin-top: 10px;
+        min-height: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>KinderForge Khan Guide</h1>
+      <div class="meta" id="path-name">Loading...</div>
+      <div class="next" id="next-step">Checking your next step...</div>
+      <div class="actions">
+        <button id="next-btn" type="button">Jump to next</button>
+        <button id="options-btn" type="button">Path settings</button>
+      </div>
+      <div id="status"></div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+  </html>

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KinderForge Path Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <h1>KinderForge Path Settings</h1>
+        <p>Define the lesson + practice sequence that should run inside your own Khan Academy account.</p>
+      </header>
+
+      <section class="panel">
+        <div class="grid two">
+          <label>
+            Path name
+            <input type="text" id="path-name" placeholder="Example: Grade 5 Fractions" />
+          </label>
+          <label>
+            Target accuracy (%)
+            <input type="number" min="50" max="100" id="target-accuracy" />
+          </label>
+          <label>
+            Frustration threshold (low scores)
+            <input type="number" min="1" max="10" id="frustration-threshold" />
+          </label>
+        </div>
+
+        <div class="toggles">
+          <label><input type="checkbox" id="coach-enabled" /> Enable in-page guide</label>
+          <label><input type="checkbox" id="auto-advance" /> Auto-jump to next step after completion</label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Learning Path</h2>
+        <p class="subtle">Tip: most learners can skip this. Just visit a Khan lesson and click <strong>Start path</strong> in the in-page prompt.</p>
+
+        <form id="add-step-form" class="grid three">
+          <label>
+            Step id
+            <input required type="text" id="step-id" placeholder="fractions_intro" />
+          </label>
+          <label>
+            Title
+            <input required type="text" id="step-title" placeholder="Intro to Fractions" />
+          </label>
+          <label>
+            Type
+            <select id="step-type">
+              <option value="lesson">Lesson</option>
+              <option value="practice">Practice</option>
+            </select>
+          </label>
+          <label class="span-2">
+            Khan slug or URL
+            <input required type="text" id="step-slug" placeholder="/math/arithmetic/fraction-arithmetic" />
+          </label>
+          <label>
+            Prerequisites (comma ids)
+            <input type="text" id="step-prereq" placeholder="fractions_intro" />
+          </label>
+          <button type="submit" class="primary">Add step</button>
+        </form>
+
+        <div id="path-list" class="path-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Recent Results</h2>
+        <div id="results-list" class="results"></div>
+      </section>
+
+      <footer class="actions">
+        <button id="save-btn" class="primary">Save settings</button>
+        <button id="clear-results-btn" type="button">Clear results</button>
+        <span id="status"></span>
+      </footer>
+    </main>
+
+    <script src="options.js"></script>
+  </body>
+  </html>

@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "KinderForge Khan Guide",
+  "description": "Adaptive lesson flow assistant for Khan Academy learners.",
+  "version": "0.1.0",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.khanacademy.org/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "KinderForge Khan Guide"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.khanacademy.org/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "css": [
+        "coach.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

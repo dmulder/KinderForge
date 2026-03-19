@@ -1,0 +1,177 @@
+:root {
+  --ink: #0f172a;
+  --muted: #475569;
+  --line: #d1d5db;
+  --paper: #ffffff;
+  --bg-a: #fff7ed;
+  --bg-b: #ecfeff;
+  --accent: #0369a1;
+  --accent-2: #f97316;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: radial-gradient(circle at top left, var(--bg-a), transparent 40%),
+    radial-gradient(circle at top right, var(--bg-b), transparent 44%),
+    #f8fafc;
+}
+
+.page {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 24px 18px 28px;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: 30px;
+}
+
+.hero p {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.panel {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  margin-top: 14px;
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.06);
+}
+
+.panel h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.subtle {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.grid {
+  display: grid;
+  gap: 10px;
+}
+
+.grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+}
+
+.span-2 {
+  grid-column: span 2;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+input,
+select {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  padding: 9px;
+}
+
+.toggles {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 700;
+  cursor: pointer;
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+button.primary {
+  background: linear-gradient(120deg, var(--accent), #0284c7);
+  color: #ffffff;
+}
+
+.path-list,
+.results {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.path-item,
+.result-item {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 9px;
+  display: grid;
+  gap: 5px;
+}
+
+.path-item__top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.chip {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.chip.practice {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+#status {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 820px) {
+  .grid.two,
+  .grid.three {
+    grid-template-columns: 1fr;
+  }
+
+  .span-2 {
+    grid-column: auto;
+  }
+}
