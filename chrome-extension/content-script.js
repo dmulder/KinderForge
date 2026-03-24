@@ -805,6 +805,56 @@ function isContentSlug(slug) {
         break;
       }
     }
+
+    if (STATE.autoPlayedForPath === key) {
+      return;
+    }
+
+    const frameSelectors = [
+      'iframe[src*="youtube.com/embed/"]',
+      'iframe[src*="youtube-nocookie.com/embed/"]'
+    ];
+
+    for (const frameSelector of frameSelectors) {
+      const frame = document.querySelector(frameSelector);
+      if (!(frame instanceof HTMLIFrameElement)) {
+        continue;
+      }
+
+      const allow = String(frame.getAttribute("allow") || "");
+      if (!allow.toLowerCase().includes("autoplay")) {
+        frame.setAttribute("allow", allow ? `${allow}; autoplay` : "autoplay");
+      }
+
+      const rawSrc = String(frame.getAttribute("src") || "").trim();
+      if (rawSrc) {
+        try {
+          const parsed = new URL(rawSrc, window.location.origin);
+          parsed.searchParams.set("autoplay", "1");
+          parsed.searchParams.set("mute", "1");
+          parsed.searchParams.set("playsinline", "1");
+          parsed.searchParams.set("enablejsapi", "1");
+          const nextSrc = parsed.toString();
+          if (nextSrc !== rawSrc) {
+            frame.setAttribute("src", nextSrc);
+            STATE.autoPlayedForPath = key;
+            break;
+          }
+        } catch (_error) {
+          // Ignore malformed iframe URLs.
+        }
+      }
+
+      if (frame.contentWindow) {
+        frame.contentWindow.postMessage(
+          JSON.stringify({ event: "command", func: "playVideo", args: [] }),
+          "*"
+        );
+        frame.contentWindow.postMessage({ event: "command", func: "playVideo", args: [] }, "*");
+        STATE.autoPlayedForPath = key;
+        break;
+      }
+    }
   }
 
   function markActiveStepVisited() {
@@ -1020,6 +1070,7 @@ function isContentSlug(slug) {
         lastPath = path;
         loadSettingsAndNextStep();
       }
+      maybeAutoPlayLessonVideo();
     }, 1200);
   }
 
