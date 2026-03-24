@@ -59,7 +59,11 @@
     activeScore: null,
     startedPathThisSession: false,
     autoPlayedForPath: "",
-    visitedMarked: new Set()
+    visitedMarked: new Set(),
+    lessonMediaBound: new WeakSet(),
+    lessonFramesBound: new WeakSet(),
+    lessonCompletionHandledForPath: "",
+    lessonMessageListenerBound: false
   };
 
   function normalizePath(path) {
@@ -812,6 +816,120 @@ function isContentSlug(slug) {
     }
   }
 
+  function lessonAdvanceKey() {
+    if (!STATE.activeStep?.id) {
+      return "";
+    }
+    return `${currentPath()}:${STATE.activeStep.id}`;
+  }
+
+  async function maybeAdvanceOnLessonCompletion(source = "lesson-complete") {
+    if (!STATE.settings || STATE.settings.coachEnabled === false || STATE.settings.autoAdvance === false) {
+      return;
+    }
+    if (!STATE.activeStep || STATE.activeStep.type === "practice") {
+      return;
+    }
+
+    const key = lessonAdvanceKey();
+    if (!key || STATE.lessonCompletionHandledForPath === key) {
+      return;
+    }
+    STATE.lessonCompletionHandledForPath = key;
+
+    const { preferredLessonSlugs, preferredPracticeSlugs, discoveredSteps } = await collectManualAdvanceCandidates();
+    const response = await chrome.runtime.sendMessage({
+      type: "KF_GOTO_NEXT",
+      manualAdvance: true,
+      preferredLessonSlugs,
+      preferredPracticeSlugs,
+      discoveredSteps
+    });
+    debug("lesson-complete-auto-advance", { source, key, response });
+
+    if (!response?.ok) {
+      STATE.lessonCompletionHandledForPath = "";
+      setStatus(response?.error || "Could not jump to next section.", { ensureVisible: true });
+      return;
+    }
+
+    if (response.skipped) {
+      setStatus(response.reason || "Lesson complete.", { ensureVisible: true });
+    }
+  }
+
+  function parsePlayerMessageData(rawData) {
+    if (!rawData) {
+      return null;
+    }
+    if (typeof rawData === "string") {
+      try {
+        return JSON.parse(rawData);
+      } catch (_error) {
+        return null;
+      }
+    }
+    if (typeof rawData === "object") {
+      return rawData;
+    }
+    return null;
+  }
+
+  function bindLessonMediaCompletionWatchers() {
+    if (!STATE.activeStep || STATE.activeStep.type === "practice") {
+      return;
+    }
+
+    const videos = document.querySelectorAll("video");
+    for (const video of videos) {
+      if (!(video instanceof HTMLVideoElement) || STATE.lessonMediaBound.has(video)) {
+        continue;
+      }
+      video.addEventListener("ended", () => {
+        maybeAdvanceOnLessonCompletion("html5-ended");
+      });
+      STATE.lessonMediaBound.add(video);
+    }
+
+    const frames = document.querySelectorAll(
+      'iframe[src*="youtube.com/embed/"], iframe[src*="youtube-nocookie.com/embed/"]'
+    );
+    for (const frame of frames) {
+      if (!(frame instanceof HTMLIFrameElement) || STATE.lessonFramesBound.has(frame)) {
+        continue;
+      }
+      sendYouTubePlayerCommand(frame, "addEventListener", ["onStateChange"]);
+      STATE.lessonFramesBound.add(frame);
+    }
+  }
+
+  function maybeBindLessonMessageListener() {
+    if (STATE.lessonMessageListenerBound) {
+      return;
+    }
+    window.addEventListener("message", (event) => {
+      const origin = String(event?.origin || "").toLowerCase();
+      if (!origin.includes("youtube.com") && !origin.includes("youtube-nocookie.com")) {
+        return;
+      }
+      const payload = parsePlayerMessageData(event.data);
+      if (!payload || typeof payload !== "object") {
+        return;
+      }
+
+      const eventName = String(payload.event || "").toLowerCase();
+      const stateFromInfo = Number(payload.info);
+      const stateFromDelivery = Number(payload?.info?.playerState);
+      const ended =
+        (eventName === "onstatechange" && stateFromInfo === 0) ||
+        (eventName === "infodelivery" && stateFromDelivery === 0);
+      if (ended) {
+        maybeAdvanceOnLessonCompletion("youtube-ended");
+      }
+    });
+    STATE.lessonMessageListenerBound = true;
+  }
+
   function maybeAutoPlayLessonVideo() {
     if (!STATE.activeStep) {
       return;
@@ -819,6 +937,10 @@ function isContentSlug(slug) {
     if (STATE.activeStep.type === "practice") {
       return;
     }
+
+    maybeBindLessonMessageListener();
+    bindLessonMediaCompletionWatchers();
+
     const key = `${currentPath()}:${STATE.activeStep.id}`;
     if (STATE.autoPlayedForPath === key) {
       maybeAutoUnmuteLessonMedia();
@@ -1093,6 +1215,7 @@ function isContentSlug(slug) {
     let lastPath = currentPath();
     const observer = new MutationObserver(() => {
       maybeRecordCompletion();
+      maybeAutoPlayLessonVideo();
     });
     observer.observe(document.body, {
       childList: true,
