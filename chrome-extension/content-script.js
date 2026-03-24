@@ -858,6 +858,14 @@ function isContentSlug(slug) {
     STATE.activeStep = findActiveStep(STATE.settings);
     STATE.nextStep = response.nextStep || null;
     STATE.startedPathThisSession = true;
+
+    const autoJumpResponse = await chrome.runtime.sendMessage({ type: "KF_GOTO_NEXT" });
+    debug("start-path-auto-jump-response", autoJumpResponse);
+    if (autoJumpResponse?.ok && !autoJumpResponse.skipped) {
+      setStatus("Path started. Jumping to first lesson...", { ensureVisible: true });
+      return;
+    }
+
     if (STATE.activeStep) {
       setStatus(`Path started. Current step: ${STATE.activeStep.title}`, { ensureVisible: true });
     } else if (STATE.nextStep) {
