@@ -757,8 +757,22 @@ function isContentSlug(slug) {
     STATE.onboarding = null;
   }
 
-  function setStatus(text) {
-    const banner = ensureBanner();
+  function removeBanner() {
+    if (STATE.banner && document.body.contains(STATE.banner)) {
+      STATE.banner.remove();
+    }
+    STATE.banner = null;
+  }
+
+  function setStatus(text, options = {}) {
+    const banner = options.ensureVisible
+      ? ensureBanner()
+      : STATE.banner && document.body.contains(STATE.banner)
+        ? STATE.banner
+        : null;
+    if (!banner) {
+      return;
+    }
     const status = banner.querySelector("#kf-status");
     if (status) {
       status.textContent = text;
@@ -845,11 +859,11 @@ function isContentSlug(slug) {
     STATE.nextStep = response.nextStep || null;
     STATE.startedPathThisSession = true;
     if (STATE.activeStep) {
-      setStatus(`Path started. Current step: ${STATE.activeStep.title}`);
+      setStatus(`Path started. Current step: ${STATE.activeStep.title}`, { ensureVisible: true });
     } else if (STATE.nextStep) {
-      setStatus(`Path started. Next: ${STATE.nextStep.title}`);
+      setStatus(`Path started. Next: ${STATE.nextStep.title}`, { ensureVisible: true });
     } else {
-      setStatus("Path started.");
+      setStatus("Path started.", { ensureVisible: true });
     }
   }
 
@@ -868,25 +882,29 @@ function isContentSlug(slug) {
     STATE.activeStep = findActiveStep(STATE.settings);
     STATE.nextStep = nextResponse?.nextStep || null;
 
-    if (STATE.settings.coachEnabled === false) {
-      setStatus("Coach paused. Enable it in Path settings.");
-      removeOnboarding();
-      return;
-    }
-
     const hasPath = Array.isArray(STATE.settings.path) && STATE.settings.path.length > 0;
     if (!hasPath) {
-      setStatus("No path yet.");
+      removeBanner();
+      if (STATE.settings.coachEnabled === false) {
+        removeOnboarding();
+        return;
+      }
       if (!onboardingSnoozed(STATE.settings) && looksLikeKhanLearningPage(currentPath())) {
         ensureOnboardingPrompt();
       }
       return;
     }
 
+    if (STATE.settings.coachEnabled === false) {
+      setStatus("Coach paused. Enable it in Path settings.", { ensureVisible: true });
+      removeOnboarding();
+      return;
+    }
+
     removeOnboarding();
     if (STATE.activeStep) {
       const label = STATE.activeStep.type === "practice" ? "Practice" : "Lesson";
-      setStatus(`${label}: ${displayStepTitle(STATE.activeStep)}`);
+      setStatus(`${label}: ${displayStepTitle(STATE.activeStep)}`, { ensureVisible: true });
       markActiveStepVisited();
       maybeAutoPlayLessonVideo();
       debug("active-step", {
@@ -894,13 +912,13 @@ function isContentSlug(slug) {
         activeStep: STATE.activeStep
       });
     } else if (STATE.nextStep) {
-      setStatus(`Next up: ${displayStepTitle(STATE.nextStep)}`);
+      setStatus(`Next up: ${displayStepTitle(STATE.nextStep)}`, { ensureVisible: true });
       debug("next-step-no-active", {
         currentPath: currentPath(),
         nextStep: STATE.nextStep
       });
     } else {
-      setStatus("Path is complete. Great progress.");
+      setStatus("Path is complete. Great progress.", { ensureVisible: true });
       debug("path-complete", { currentPath: currentPath() });
     }
   }
@@ -975,7 +993,6 @@ function isContentSlug(slug) {
       window.localStorage.removeItem(PERSISTENT_DEBUG_KEY);
       return true;
     };
-    ensureBanner();
     await loadSettingsAndNextStep();
     await maybeRecordCompletion();
 
