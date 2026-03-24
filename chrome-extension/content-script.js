@@ -779,6 +779,39 @@ function isContentSlug(slug) {
     }
   }
 
+  function sendYouTubePlayerCommand(frame, func, args = []) {
+    if (!(frame instanceof HTMLIFrameElement) || !frame.contentWindow) {
+      return;
+    }
+    const payload = { event: "command", func, args };
+    frame.contentWindow.postMessage(JSON.stringify(payload), "*");
+    frame.contentWindow.postMessage(payload, "*");
+  }
+
+  function maybeAutoUnmuteLessonMedia() {
+    const videos = document.querySelectorAll("video");
+    for (const video of videos) {
+      if (!(video instanceof HTMLVideoElement)) {
+        continue;
+      }
+      if (video.muted) {
+        video.muted = false;
+      }
+      if (video.volume === 0) {
+        video.volume = 1;
+      }
+    }
+
+    const frames = document.querySelectorAll(
+      'iframe[src*="youtube.com/embed/"], iframe[src*="youtube-nocookie.com/embed/"]'
+    );
+    for (const frame of frames) {
+      sendYouTubePlayerCommand(frame, "playVideo", []);
+      sendYouTubePlayerCommand(frame, "unMute", []);
+      sendYouTubePlayerCommand(frame, "setVolume", [100]);
+    }
+  }
+
   function maybeAutoPlayLessonVideo() {
     if (!STATE.activeStep) {
       return;
@@ -788,6 +821,7 @@ function isContentSlug(slug) {
     }
     const key = `${currentPath()}:${STATE.activeStep.id}`;
     if (STATE.autoPlayedForPath === key) {
+      maybeAutoUnmuteLessonMedia();
       return;
     }
     const selectors = [
@@ -802,6 +836,7 @@ function isContentSlug(slug) {
       if (button instanceof HTMLElement) {
         button.click();
         STATE.autoPlayedForPath = key;
+        maybeAutoUnmuteLessonMedia();
         break;
       }
     }
@@ -846,15 +881,16 @@ function isContentSlug(slug) {
       }
 
       if (frame.contentWindow) {
-        frame.contentWindow.postMessage(
-          JSON.stringify({ event: "command", func: "playVideo", args: [] }),
-          "*"
-        );
-        frame.contentWindow.postMessage({ event: "command", func: "playVideo", args: [] }, "*");
+        sendYouTubePlayerCommand(frame, "playVideo", []);
+        sendYouTubePlayerCommand(frame, "unMute", []);
+        sendYouTubePlayerCommand(frame, "setVolume", [100]);
         STATE.autoPlayedForPath = key;
+        maybeAutoUnmuteLessonMedia();
         break;
       }
     }
+
+    window.setTimeout(maybeAutoUnmuteLessonMedia, 450);
   }
 
   function markActiveStepVisited() {
