@@ -63,7 +63,8 @@
     lessonMediaBound: new WeakSet(),
     lessonFramesBound: new WeakSet(),
     lessonCompletionHandledForPath: "",
-    lessonMessageListenerBound: false
+    lessonMessageListenerBound: false,
+    lessonStartClickedForPath: ""
   };
 
   function normalizePath(path) {
@@ -817,10 +818,15 @@ function isContentSlug(slug) {
   }
 
   function lessonAdvanceKey() {
-    if (!STATE.activeStep?.id) {
+    const step = STATE.activeStep?.type === "lesson"
+      ? STATE.activeStep
+      : STATE.nextStep?.type === "lesson"
+        ? STATE.nextStep
+        : null;
+    if (!step?.id) {
       return "";
     }
-    return `${currentPath()}:${STATE.activeStep.id}`;
+    return `${currentPath()}:${step.id}`;
   }
 
   async function maybeAdvanceOnLessonCompletion(source = "lesson-complete") {
@@ -930,11 +936,113 @@ function isContentSlug(slug) {
     STATE.lessonMessageListenerBound = true;
   }
 
-  function maybeAutoPlayLessonVideo() {
-    if (!STATE.activeStep) {
+  function maybeClickLessonStartButton() {
+    const step = STATE.activeStep?.type === "lesson"
+      ? STATE.activeStep
+      : STATE.nextStep?.type === "lesson"
+        ? STATE.nextStep
+        : null;
+    if (!step) {
       return;
     }
-    if (STATE.activeStep.type === "practice") {
+    const key = lessonAdvanceKey();
+    if (!key || STATE.lessonStartClickedForPath === key) {
+      return;
+    }
+
+    const buttons = document.querySelectorAll(
+      'div._o4c9ktg > button[aria-disabled="false"], button[aria-disabled="false"], button'
+    );
+    for (const button of buttons) {
+      if (!(button instanceof HTMLButtonElement)) {
+        continue;
+      }
+      if (button.disabled || String(button.getAttribute("aria-disabled") || "").toLowerCase() === "true") {
+        continue;
+      }
+      const rawText = String(button.innerText || button.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase()
+        .normalize("NFKC");
+      const normalizedText = rawText.replace(/[’`']/g, "'");
+      if (
+        normalizedText !== "let's go" &&
+        normalizedText !== "lets go" &&
+        !normalizedText.includes("let's go") &&
+        !normalizedText.includes("lets go")
+      ) {
+        continue;
+      }
+      button.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      button.click();
+      STATE.lessonStartClickedForPath = key;
+      debug("lesson-start-clicked", { key, text: rawText, stepId: step.id });
+      const clickedPath = currentPath();
+      window.setTimeout(() => {
+        if (currentPath() === clickedPath) {
+          STATE.lessonStartClickedForPath = "";
+        }
+      }, 2200);
+      window.setTimeout(() => {
+        maybeAutoPlayLessonVideo();
+      }, 120);
+      return;
+    }
+
+    const labels = document.querySelectorAll("span");
+    for (const label of labels) {
+      if (!(label instanceof HTMLSpanElement)) {
+        continue;
+      }
+      const text = String(label.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase()
+        .normalize("NFKC")
+        .replace(/[’`']/g, "'");
+      if (
+        text !== "let's go" &&
+        text !== "lets go" &&
+        !text.includes("let's go") &&
+        !text.includes("lets go")
+      ) {
+        continue;
+      }
+      const button = label.closest("button");
+      if (!(button instanceof HTMLButtonElement)) {
+        continue;
+      }
+      if (button.disabled || String(button.getAttribute("aria-disabled") || "").toLowerCase() === "true") {
+        continue;
+      }
+      button.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+      button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      button.click();
+      STATE.lessonStartClickedForPath = key;
+      debug("lesson-start-clicked-label", { key, text, stepId: step.id });
+      const clickedPath = currentPath();
+      window.setTimeout(() => {
+        if (currentPath() === clickedPath) {
+          STATE.lessonStartClickedForPath = "";
+        }
+      }, 2200);
+      window.setTimeout(() => {
+        maybeAutoPlayLessonVideo();
+      }, 120);
+      return;
+    }
+  }
+
+  function maybeAutoPlayLessonVideo() {
+    maybeClickLessonStartButton();
+
+    if (!STATE.activeStep || STATE.activeStep.type === "practice") {
       return;
     }
 
