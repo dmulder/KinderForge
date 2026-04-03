@@ -64,7 +64,9 @@
     lessonFramesBound: new WeakSet(),
     lessonCompletionHandledForPath: "",
     lessonMessageListenerBound: false,
-    lessonStartClickedForPath: ""
+    lessonStartClickedForPath: "",
+    practicePopupHandledKey: "",
+    lastPracticeAdvanceAt: 0
   };
 
   function normalizePath(path) {
@@ -881,6 +883,183 @@ function isContentSlug(slug) {
     return null;
   }
 
+  function normalizeActionText(value) {
+    return String(value || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase()
+      .normalize("NFKC")
+      .replace(/[’`']/g, "'");
+  }
+
+  function isButtonEnabled(button) {
+    if (!(button instanceof HTMLButtonElement)) {
+      return false;
+    }
+    if (button.disabled) {
+      return false;
+    }
+    return String(button.getAttribute("aria-disabled") || "").toLowerCase() !== "true";
+  }
+
+  function clickButtonLikeUser(button) {
+    if (!isButtonEnabled(button)) {
+      return false;
+    }
+    button.focus();
+    const PointerCtor = window.PointerEvent || null;
+    if (PointerCtor) {
+      button.dispatchEvent(new PointerCtor("pointerdown", { bubbles: true, cancelable: true, pointerType: "mouse" }));
+    } else {
+      button.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+    }
+    button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    if (PointerCtor) {
+      button.dispatchEvent(new PointerCtor("pointerup", { bubbles: true, cancelable: true, pointerType: "mouse" }));
+    } else {
+      button.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+    }
+    button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    button.click();
+    return true;
+  }
+
+  function findEnabledButtonByText(root, phrases = []) {
+    const container = root instanceof HTMLElement || root instanceof Document ? root : document;
+    const buttons = container.querySelectorAll("button");
+    for (const button of buttons) {
+      if (!isButtonEnabled(button)) {
+        continue;
+      }
+      const text = normalizeActionText(button.innerText || button.textContent || "");
+      if (!text) {
+        continue;
+      }
+      if (phrases.some((phrase) => text.includes(phrase))) {
+        return button;
+      }
+    }
+    return null;
+  }
+
+  function findPracticeNextQuestionButton() {
+    const direct = document.querySelector('button[data-testid="exercise-next-question"]');
+    if (direct instanceof HTMLButtonElement && isButtonEnabled(direct)) {
+      return direct;
+    }
+
+    const innerLabel = document.querySelector('[data-testid="exercise-next-question-inner-label"]');
+    const viaLabel = innerLabel instanceof HTMLElement ? innerLabel.closest("button") : null;
+    if (viaLabel instanceof HTMLButtonElement && isButtonEnabled(viaLabel)) {
+      return viaLabel;
+    }
+
+    return findEnabledButtonByText(document, ["next question", "next problem"]);
+  }
+
+  function maybeAutoAdvancePracticeQuestion() {
+    if (!STATE.settings || STATE.settings.coachEnabled === false) {
+      return;
+    }
+    const onPracticeStep =
+      STATE.activeStep?.type === "practice" ||
+      toStepType(currentPath()) === "practice";
+    if (!onPracticeStep) {
+      return;
+    }
+
+    const nextButton = findPracticeNextQuestionButton();
+    if (!(nextButton instanceof HTMLButtonElement)) {
+      return;
+    }
+
+    const controlsId = String(nextButton.getAttribute("aria-controls") || "").trim();
+    const controlledDialog = controlsId ? document.getElementById(controlsId) : null;
+    const expanded = String(nextButton.getAttribute("aria-expanded") || "").toLowerCase() === "true";
+    const dialogText = normalizeActionText(controlledDialog?.innerText || controlledDialog?.textContent || "");
+    const hasNiceWorkDialog =
+      controlledDialog instanceof HTMLElement &&
+      (dialogText.includes("nice work") || dialogText.includes("you got it") || dialogText.includes("onward"));
+
+    if (!expanded && !hasNiceWorkDialog) {
+      return;
+    }
+
+    const token = `${currentPath()}:${controlsId || "no-controls"}:${dialogText.slice(0, 96)}`;
+    if (STATE.practicePopupHandledKey === token) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - STATE.lastPracticeAdvanceAt < 800) {
+      return;
+    }
+    STATE.lastPracticeAdvanceAt = now;
+    STATE.practicePopupHandledKey = token;
+
+    const clickNextQuestion = (logLabel = "practice-next-question-clicked") => {
+      const button = findPracticeNextQuestionButton();
+      if (!button) {
+        return false;
+      }
+      clickButtonLikeUser(button);
+      debug(logLabel, {
+        token,
+        text: normalizeActionText(button.innerText || button.textContent || ""),
+        ariaExpanded: String(button.getAttribute("aria-expanded") || "")
+      });
+      return true;
+    };
+
+    const attemptAdvance = (label) => {
+      const button = findPracticeNextQuestionButton();
+      if (!button) {
+        return false;
+      }
+      const attemptControlsId = String(button.getAttribute("aria-controls") || "").trim();
+      const attemptDialog = attemptControlsId ? document.getElementById(attemptControlsId) : null;
+      const closeButton = attemptDialog instanceof HTMLElement
+        ? attemptDialog.querySelector('button[data-testid="popover-close-btn"]')
+        : null;
+      if (closeButton instanceof HTMLButtonElement) {
+        clickButtonLikeUser(closeButton);
+      }
+      return clickNextQuestion(label);
+    };
+
+    attemptAdvance("practice-next-question-clicked-primary");
+    window.setTimeout(() => {
+      attemptAdvance("practice-next-question-clicked-followup-1");
+    }, 120);
+    window.setTimeout(() => {
+      attemptAdvance("practice-next-question-clicked-followup-2");
+    }, 300);
+    window.setTimeout(() => {
+      const button = findPracticeNextQuestionButton();
+      const attemptControlsId = String(button?.getAttribute("aria-controls") || "").trim();
+      const attemptDialog = attemptControlsId ? document.getElementById(attemptControlsId) : null;
+      const attemptDialogText = normalizeActionText(attemptDialog?.innerText || attemptDialog?.textContent || "");
+      const stillBlocked =
+        String(button?.getAttribute("aria-expanded") || "").toLowerCase() === "true" ||
+        attemptDialogText.includes("nice work");
+      if (stillBlocked) {
+        STATE.practicePopupHandledKey = "";
+        return;
+      }
+      if (STATE.practicePopupHandledKey === token) {
+        STATE.practicePopupHandledKey = `${token}:done`;
+      }
+    }, 650);
+
+    if (!clickNextQuestion("practice-next-question-clicked-fallback")) {
+      window.setTimeout(() => {
+        if (!clickNextQuestion("practice-next-question-clicked-fallback-retry")) {
+          STATE.practicePopupHandledKey = "";
+        }
+      }, 180);
+    }
+  }
+
   function bindLessonMediaCompletionWatchers() {
     if (!STATE.activeStep || STATE.activeStep.type === "practice") {
       return;
@@ -954,18 +1133,10 @@ function isContentSlug(slug) {
       'div._o4c9ktg > button[aria-disabled="false"], button[aria-disabled="false"], button'
     );
     for (const button of buttons) {
-      if (!(button instanceof HTMLButtonElement)) {
+      if (!isButtonEnabled(button)) {
         continue;
       }
-      if (button.disabled || String(button.getAttribute("aria-disabled") || "").toLowerCase() === "true") {
-        continue;
-      }
-      const rawText = String(button.innerText || button.textContent || "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase()
-        .normalize("NFKC");
-      const normalizedText = rawText.replace(/[’`']/g, "'");
+      const normalizedText = normalizeActionText(button.innerText || button.textContent || "");
       if (
         normalizedText !== "let's go" &&
         normalizedText !== "lets go" &&
@@ -974,13 +1145,9 @@ function isContentSlug(slug) {
       ) {
         continue;
       }
-      button.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
-      button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-      button.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
-      button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-      button.click();
+      clickButtonLikeUser(button);
       STATE.lessonStartClickedForPath = key;
-      debug("lesson-start-clicked", { key, text: rawText, stepId: step.id });
+      debug("lesson-start-clicked", { key, text: normalizedText, stepId: step.id });
       const clickedPath = currentPath();
       window.setTimeout(() => {
         if (currentPath() === clickedPath) {
@@ -998,12 +1165,7 @@ function isContentSlug(slug) {
       if (!(label instanceof HTMLSpanElement)) {
         continue;
       }
-      const text = String(label.textContent || "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase()
-        .normalize("NFKC")
-        .replace(/[’`']/g, "'");
+      const text = normalizeActionText(label.textContent || "");
       if (
         text !== "let's go" &&
         text !== "lets go" &&
@@ -1016,14 +1178,10 @@ function isContentSlug(slug) {
       if (!(button instanceof HTMLButtonElement)) {
         continue;
       }
-      if (button.disabled || String(button.getAttribute("aria-disabled") || "").toLowerCase() === "true") {
+      if (!isButtonEnabled(button)) {
         continue;
       }
-      button.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
-      button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-      button.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
-      button.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-      button.click();
+      clickButtonLikeUser(button);
       STATE.lessonStartClickedForPath = key;
       debug("lesson-start-clicked-label", { key, text, stepId: step.id });
       const clickedPath = currentPath();
@@ -1323,6 +1481,7 @@ function isContentSlug(slug) {
     let lastPath = currentPath();
     const observer = new MutationObserver(() => {
       maybeRecordCompletion();
+      maybeAutoAdvancePracticeQuestion();
       maybeAutoPlayLessonVideo();
     });
     observer.observe(document.body, {
@@ -1337,6 +1496,7 @@ function isContentSlug(slug) {
         lastPath = path;
         loadSettingsAndNextStep();
       }
+      maybeAutoAdvancePracticeQuestion();
       maybeAutoPlayLessonVideo();
     }, 1200);
   }
